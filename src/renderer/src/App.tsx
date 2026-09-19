@@ -124,10 +124,33 @@ export function App() {
   </main>
 }
 
+const dragThreshold = 16
+type PodDrag = {
+  phase: 'idle' | 'pressing' | 'dragging' | 'settling'
+  pointerId: number
+  startX: number
+  startY: number
+  moved: boolean
+  anchorX: number
+  anchorY: number
+  posX: number
+  posY: number
+  velX: number
+  velY: number
+  targetX: number
+  targetY: number
+  stiffness: number
+  damping: number
+  instant: boolean
+  lastFrame: number
+  raf: number | undefined
+}
 function CrewPod({ workers, onClick }: { workers: Worker[]; onClick: () => void }) {
   const summary = collapsedSummary(workers)
   const label = summary.kind === 'empty' ? 'No observed Claude Code workers' : `Open ${workers.length} observed Claude Code sessions`
   const podRef = useRef<HTMLDivElement>(null)
+  const [dragging, setDragging] = useState(false)
+  const dragRef = useRef<PodDrag>({ phase: 'idle', pointerId: -1, startX: 0, startY: 0, moved: false, anchorX: 0, anchorY: 0, posX: 0, posY: 0, velX: 0, velY: 0, targetX: 0, targetY: 0, stiffness: 1, damping: 1, instant: false, lastFrame: 0, raf: undefined })
 
   useEffect(() => {
     if (window.matchMedia('(prefers-reduced-motion: reduce)').matches) return
@@ -143,9 +166,107 @@ function CrewPod({ workers, onClick }: { workers: Worker[]; onClick: () => void 
     return () => { if (timer !== undefined) window.clearTimeout(timer) }
   }, [])
 
-  return <div ref={podRef} className={`crew-pod crew-pod--${summary.kind}`}>
+  useEffect(() => () => {
+    const drag = dragRef.current
+    if (drag.raf !== undefined) window.cancelAnimationFrame(drag.raf)
+    if (drag.phase === 'dragging' || drag.phase === 'settling') void window.orbit.dragEnd()
+    drag.phase = 'idle'
+  }, [])
+
+  const step = (now: number) => {
+    const drag = dragRef.current
+    if (drag.phase !== 'dragging' && drag.phase !== 'settling') { drag.raf = undefined; return }
+    const dt = Math.min((now - drag.lastFrame) / 1000, 1 / 32)
+    drag.lastFrame = now
+    if (drag.instant) {
+      drag.posX = drag.targetX
+      drag.posY = drag.targetY
+      drag.velX = 0
+      drag.velY = 0
+    } else {
+      drag.velX += (drag.stiffness * (drag.targetX - drag.posX) - drag.damping * drag.velX) * dt
+      drag.velY += (drag.stiffness * (drag.targetY - drag.posY) - drag.damping * drag.velY) * dt
+      drag.posX += drag.velX * dt
+      drag.posY += drag.velY * dt
+    }
+    void window.orbit.dragMove({ x: Math.round(drag.posX), y: Math.round(drag.posY) })
+    if (drag.phase === 'settling' && Math.abs(drag.targetX - drag.posX) < .5 && Math.abs(drag.targetY - drag.posY) < .5 && Math.abs(drag.velX) < .5 && Math.abs(drag.velY) < .5) {
+      drag.raf = undefined
+      drag.phase = 'idle'
+      setDragging(false)
+      void window.orbit.dragEnd()
+      return
+    }
+    drag.raf = window.requestAnimationFrame(step)
+  }
+
+  const begin = (event: PointerEvent<HTMLDivElement>) => {
+    const drag = dragRef.current
+    if (event.button !== 0 || drag.phase !== 'idle') return
+    drag.phase = 'pressing'
+    drag.pointerId = event.pointerId
+    drag.startX = event.screenX
+    drag.startY = event.screenY
+    drag.moved = false
+    podRef.current?.setPointerCapture(event.pointerId)
+  }
+
+  const move = (event: PointerEvent<HTMLDivElement>) => {
+    const drag = dragRef.current
+    if (drag.phase === 'idle' || event.pointerId !== drag.pointerId) return
+    if (drag.phase === 'pressing') {
+      if ((event.screenX - drag.startX) ** 2 + (event.screenY - drag.startY) ** 2 < dragThreshold ** 2) return
+      drag.phase = 'dragging'
+      drag.moved = true
+      setDragging(true)
+      const instant = window.matchMedia('(prefers-reduced-motion: reduce)').matches
+      drag.instant = instant
+      drag.stiffness = instant ? 0 : 110
+      drag.damping = instant ? 0 : 19
+      void window.orbit.dragStart({ x: drag.startX, y: drag.startY }).then(bounds => {
+        const current = dragRef.current
+        if (current.phase !== 'dragging') return
+        current.anchorX = drag.startX - bounds.x
+        current.anchorY = drag.startY - bounds.y
+        current.posX = bounds.x
+        current.posY = bounds.y
+        current.velX = 0
+        current.velY = 0
+        current.targetX = event.screenX - current.anchorX
+        current.targetY = event.screenY - current.anchorY
+        current.lastFrame = performance.now()
+        current.raf = window.requestAnimationFrame(step)
+      })
+      return
+    }
+    if (drag.phase === 'dragging') {
+      drag.targetX = event.screenX - drag.anchorX
+      drag.targetY = event.screenY - drag.anchorY
+    }
+  }
+
+  const end = (event: PointerEvent<HTMLDivElement>) => {
+    const drag = dragRef.current
+    if (drag.phase === 'idle' || event.pointerId !== drag.pointerId) return
+    if (drag.phase === 'pressing') { drag.phase = 'idle'; return }
+    drag.targetX = event.screenX - drag.anchorX
+    drag.targetY = event.screenY - drag.anchorY
+    drag.phase = 'settling'
+  }
+
+  const openPod = () => { if (dragRef.current.moved) return; onClick() }
+
+  return <div
+    ref={podRef}
+    className={`crew-pod crew-pod--${summary.kind}${dragging ? ' crew-pod--dragging' : ''}`}
+    onPointerDown={begin}
+    onPointerMove={move}
+    onPointerUp={end}
+    onPointerCancel={end}
+    onClick={openPod}
+  >
     <div className="crew-pod__drag-ring" aria-label="Drag Orbit" title="Drag to move Orbit" />
-    <button className="crew-pod__open" onClick={onClick} aria-label={label}><CrewOrbit workers={workers} /></button>
+    <button className="crew-pod__open" aria-label={label}><CrewOrbit workers={workers} /></button>
   </div>
 }
 const orbitDotSlots = [{ left: '48%', top: '-2px' }, { left: '82%', top: '17%' }, { left: '82%', top: '65%' }, { left: '48%', top: '87%' }, { left: '4%', top: '65%' }, { left: '4%', top: '17%' }]

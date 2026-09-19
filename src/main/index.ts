@@ -22,6 +22,7 @@ let persistence: PersistenceStore | undefined
 let pointerMonitor: NodeJS.Timeout | undefined
 let collapsedAnchor: { x: number; y: number } | undefined
 let programmaticBounds: Electron.Rectangle | undefined
+let dragging = false
 const mockAttentionWorkers = () => process.env.ORBIT_MOCK_ATTENTION === '1' ? [crew[0]] : undefined
 
 function clamp(value: number, min: number, max: number): number { return Math.min(Math.max(value, min), Math.max(min, max)) }
@@ -105,12 +106,11 @@ function createWindow(): void {
   window.setMenuBarVisibility(false)
   window.on('closed', () => { window = undefined })
   window.on('moved', () => {
-    snapToWorkArea()
+    if (!dragging) snapToWorkArea()
     const bounds = window!.getBounds()
     const isProgrammaticMove = programmaticBounds && bounds.x === programmaticBounds.x && bounds.y === programmaticBounds.y && bounds.width === programmaticBounds.width && bounds.height === programmaticBounds.height
     if (isProgrammaticMove) programmaticBounds = undefined
-    else updateCollapsedAnchor(bounds)
-    persistPosition()
+    else { updateCollapsedAnchor(bounds); if (!dragging) persistPosition() }
   })
   if (process.env.ELECTRON_RENDERER_URL) void window.loadURL(process.env.ELECTRON_RENDERER_URL)
   else void window.loadFile(join(__dirname, '../renderer/index.html'))
@@ -139,8 +139,37 @@ app.whenReady().then(async () => {
   await persistence.load()
   createWindow()
   const modeSchema = z.enum(['collapsed', 'orbit', 'preview', 'detail', 'empty'])
+  const pointSchema = z.object({ x: z.number(), y: z.number() })
   ipcMain.handle('orbit:set-mode', (_event, value: unknown) => setMode(modeSchema.parse(value)))
   ipcMain.handle('orbit:get-workers', () => mockAttentionWorkers() || workerManager?.getWorkerSnapshot() || [])
+  ipcMain.handle('orbit:drag-start', (_event, value: unknown) => {
+    if (!window || window.isDestroyed() || dragging || mode !== 'collapsed') return { x: 0, y: 0 }
+    pointSchema.parse(value)
+    dragging = true
+    return { x: window.getBounds().x, y: window.getBounds().y }
+  })
+  ipcMain.handle('orbit:drag-move', (_event, value: unknown) => {
+    if (!window || window.isDestroyed() || !dragging) return
+    const point = pointSchema.parse(value)
+    // The spring simulation in the renderer asks for absolute positions; keep at
+    // least a sliver of the pod reachable so a fast flick can't strand it.
+    const bounds = window.getBounds()
+    const area = currentWorkArea()
+    const visible = 44
+    window.setPosition(
+      clamp(Math.round(point.x), area.x - bounds.width + visible, area.x + area.width - visible),
+      clamp(Math.round(point.y), area.y - bounds.height + visible, area.y + area.height - visible),
+      false
+    )
+  })
+  ipcMain.handle('orbit:drag-end', () => {
+    if (!dragging) return
+    dragging = false
+    if (!window || window.isDestroyed()) return
+    snapToWorkArea()
+    updateCollapsedAnchor(window.getBounds())
+    persistPosition()
+  })
   globalShortcut.register('Control+Alt+O', () => window?.webContents.send('orbit:toggle'))
 })
 app.on('will-quit', () => { globalShortcut.unregisterAll(); workerManager?.stop() })

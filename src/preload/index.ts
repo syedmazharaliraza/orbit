@@ -5,6 +5,9 @@ type Mode = 'collapsed' | 'orbit' | 'preview' | 'detail' | 'empty'
 contextBridge.exposeInMainWorld('orbit', {
   getWorkers: () => ipcRenderer.invoke('orbit:get-workers'),
   setMode: (mode: Mode) => ipcRenderer.invoke('orbit:set-mode', mode),
+  dragStart: (position: { x: number; y: number }) => ipcRenderer.invoke('orbit:drag-start', position),
+  dragMove: (position: { x: number; y: number }) => ipcRenderer.invoke('orbit:drag-move', position),
+  dragEnd: () => ipcRenderer.invoke('orbit:drag-end'),
   onMode: (listener: (mode: Mode) => void) => {
     const handler = (_event: Electron.IpcRendererEvent, mode: Mode) => listener(mode)
     ipcRenderer.on('orbit:mode', handler)
