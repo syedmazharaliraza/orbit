@@ -1,0 +1,15 @@
+# Dependencies and generated Electron/Vite output
+node_modules/
+out/
+
+# Local environment and editor files
+.env
+.env.*
+!.env.example
+.DS_Store
+.idea/
+.vscode/
+
+# Test/debug captures
+*.log
+coverage/
