@@ -13,7 +13,7 @@ const pod = { width: 128, height: 128 }
 const orbit = { width: 330, height: 388 }
 const preview = { width: 566, height: 388 }
 const detail = { width: 408, height: 704 }
-const empty = { width: 262, height: 326 }
+const empty = { width: 330, height: 388 }
 
 let window: BrowserWindow | undefined
 let mode: Mode = 'collapsed'

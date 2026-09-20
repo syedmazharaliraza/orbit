@@ -40,7 +40,7 @@ export function App() {
   }, [request])
   const closeOrbit = useCallback(() => {
     clearTimer(previewTimer)
-    if (modeRef.current !== 'orbit' && modeRef.current !== 'preview') return
+    if (modeRef.current !== 'orbit' && modeRef.current !== 'preview' && modeRef.current !== 'empty') return
     if (collapseTimer.current !== undefined) return
     pointerRegion.current = 'outside'
     setClosing(true)
@@ -117,10 +117,10 @@ export function App() {
   useEffect(() => () => { clearTimer(previewTimer); clearTimer(collapseTimer) }, [])
 
   return <main className={`app app--${mode}`} onPointerMove={onPointerMove}>
-    {mode === 'collapsed' && <CrewPod workers={workers} onClick={open} />}
+    <CrewPod workers={workers} onClick={open} visible={mode === 'collapsed'} />
     {(mode === 'orbit' || mode === 'preview') && <OrbitView workers={workers} selected={selected} preview={mode === 'preview'} closing={closing} onPreview={setPreview} onClose={closeOrbit} onDetail={worker => { cancelCollapse(); setSelected(worker); request('detail') }} />}
     {mode === 'detail' && <WorkerDetail worker={selected} onClose={() => request('orbit')} />}
-    {mode === 'empty' && <EmptyCrew onClose={() => request('collapsed')} />}
+    {mode === 'empty' && <EmptyCrew closing={closing} onClose={closeOrbit} />}
   </main>
 }
 
@@ -145,7 +145,7 @@ type PodDrag = {
   lastFrame: number
   raf: number | undefined
 }
-function CrewPod({ workers, onClick }: { workers: Worker[]; onClick: () => void }) {
+function CrewPod({ workers, onClick, visible }: { workers: Worker[]; onClick: () => void; visible: boolean }) {
   const summary = collapsedSummary(workers)
   const label = summary.kind === 'empty' ? 'No observed Claude Code workers' : `Open ${workers.length} observed Claude Code sessions`
   const podRef = useRef<HTMLDivElement>(null)
@@ -258,12 +258,13 @@ function CrewPod({ workers, onClick }: { workers: Worker[]; onClick: () => void 
 
   return <div
     ref={podRef}
-    className={`crew-pod crew-pod--${summary.kind}${dragging ? ' crew-pod--dragging' : ''}`}
-    onPointerDown={begin}
-    onPointerMove={move}
-    onPointerUp={end}
-    onPointerCancel={end}
-    onClick={openPod}
+    className={`crew-pod crew-pod--${summary.kind}${dragging ? ' crew-pod--dragging' : ''}${visible ? '' : ' crew-pod--hidden'}`}
+    onPointerDown={visible ? begin : undefined}
+    onPointerMove={visible ? move : undefined}
+    onPointerUp={visible ? end : undefined}
+    onPointerCancel={visible ? end : undefined}
+    onClick={visible ? openPod : undefined}
+    style={{ pointerEvents: visible ? 'auto' : 'none' }}
   >
     <div className="crew-pod__drag-ring" aria-label="Drag Orbit" title="Drag to move Orbit" />
     <button className="crew-pod__open" aria-label={label}><CrewOrbit workers={workers} /></button>
@@ -301,7 +302,7 @@ function WorkerDetail({ worker, onClose }: { worker: Worker; onClose: () => void
 function QuestionNotice({ question }: { question: NonNullable<Worker['question']> }) { return <section className="question-request"><b>CLAUDE NEEDS YOUR INPUT</b>{question.questions.map((item, index) => <div className="question-block" key={`${item.header || 'question'}-${index}`}>{item.header && <label>{item.header}</label>}<p>{item.question}</p><div className="question-options">{item.options.map(option => <span className="question-option" key={option.label}><strong>{option.label}</strong>{option.description && <small>{option.description}</small>}</span>)}</div></div>)}<em>Return to the Claude Code session to answer.</em></section> }
 function PermissionNotice({ permission }: { permission: NonNullable<Worker['permission']> }) { const [before, after] = permission.question.split('{command}'); return <section className="permission"><b>CLAUDE IS WAITING FOR PERMISSION</b><p>{before}<code>{permission.command}</code>{after}</p><small>Return to the Claude Code session to decide.</small></section> }
 function DriftHint({ worker }: { worker: Worker }) { const signal = worker.signal!; return <section className={`heuristic heuristic--${signal.kind}`}><div><i />POSSIBLY {signal.kind.toUpperCase()} · {signal.confidence}% · A GUESS</div><p>{signal.evidence}</p>{signal.rule && <small>rule: {signal.rule}</small>}{signal.files && <div className="heuristic-files">{signal.files.map(file => <span className={file.related ? 'related' : ''} key={file.name}>{file.name}</span>)}</div>}<small>Informational only; Orbit does not alter this session.</small></section> }
-function EmptyCrew({ onClose }: { onClose: () => void }) { return <section className="empty-crew"><button className="detail-close" onClick={onClose} aria-label="Close empty crew">×</button><div className="empty-airlock"><i /><Astronaut size={52} hue={210} mark="dot" state="idle" /></div><div><h1>Nobody out there yet</h1><p>Orbit is observing local Claude Code sessions. Start a session in your terminal and it will appear here.</p></div><small>read-only observation</small><small>drag me anywhere</small></section> }
+function EmptyCrew({ closing, onClose }: { closing: boolean; onClose: () => void }) { return <div className={`empty-stage${closing ? ' empty-stage--closing' : ''}`}><section className="empty-crew"><button className="orbit-close" onClick={onClose} aria-label="Close Orbit">×</button><div className="empty-airlock"><i /><Astronaut size={52} hue={210} mark="dot" state="idle" /></div><div><h1>Nobody out there yet</h1><p>Orbit is observing local Claude Code sessions. Start a session in your terminal and it will appear here.</p></div><small>read-only observation</small><small>drag me anywhere</small></section><div className="composer composer--observing orbit-drag-region" title="Drag to move Orbit"><span>Observing local Claude Code sessions</span><em>read-only</em></div></div> }
 function formatUsage(usage: NonNullable<Worker['usage']>) { const format = (tokens: number) => tokens >= 1000000 ? `${(tokens / 1000000).toFixed(1)}M` : tokens >= 1000 ? `${Math.round(tokens / 1000)}k` : `${tokens}`; const cache = usage.cacheReadInputTokens ? ` · ${format(usage.cacheReadInputTokens)} cached` : ''; return `${format(usage.inputTokens)} in · ${format(usage.outputTokens)} out${cache} · ${usage.turnCount} turn${usage.turnCount === 1 ? '' : 's'}` }
 function waitingLabel(reason: string) { if (/permission|approval|approve|allow/i.test(reason)) return 'waiting for permission in Claude Code'; if (/question|input|choice/i.test(reason)) return 'waiting for your input in Claude Code'; return 'Claude Code has paused for input' }
 function presentationLabel(state: Worker['presentation']) { return ({ working: 'WORKING', waiting: 'NEEDS YOU', attention: 'NEEDS CHECK', done: 'FINISHED', idle: 'IDLE' })[state] }
