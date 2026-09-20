@@ -19,12 +19,7 @@ export class WorkerManager extends EventEmitter {
     this.window = window
     if (!this.useRealSessions) return this.initializeMockWorkers()
 
-    this.observer = new ClaudeCodeSessionObserver({
-      discoveryInterval: 3_000,
-      transcriptEnabled: true,
-      maxActivityHistory: 20,
-      useFilesystemWatching: true
-    })
+    this.observer = new ClaudeCodeSessionObserver()
     this.observer.on('session-state-updated', (state: ClaudeSessionState) => this.updateObservedWorker(state))
     this.observer.on('session-removed', (sessionId: string) => {
       this.workers.delete(sessionId)

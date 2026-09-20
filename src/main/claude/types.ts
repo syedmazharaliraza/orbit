@@ -66,58 +66,8 @@ export interface SessionMetadata extends DiscoveredSession {
 }
 
 // ============================================================================
-// History Types (from ~/.claude/history.jsonl)
+// Question/Elicitation Types (used in hook events and session state)
 // ============================================================================
-
-export interface HistoryEntry {
-  display: string
-  timestamp: number
-  project: string
-  sessionId: string
-}
-
-// ============================================================================
-// Transcript Types (from ~/.claude/projects/<encoded>/<sessionId>.jsonl)
-// ============================================================================
-
-export interface TranscriptCheckpoint {
-  sessionId: string
-  byteOffset: number
-  lastEventUuid: string | null
-  lastUpdated: number
-}
-
-export interface TranscriptEvent {
-  type: string
-  uuid: string
-  parentUuid?: string
-  timestamp: string
-  sessionId: string
-  cwd?: string
-  gitBranch?: string
-  [key: string]: unknown
-}
-
-export interface LastPromptEvent extends TranscriptEvent {
-  type: 'last-prompt'
-  lastPrompt?: string
-  leafUuid?: string
-}
-
-export interface ToolUseBlock {
-  type: 'tool_use'
-  id: string
-  name: string
-  input: {
-    file_path?: string
-    path?: string
-    notebook_path?: string
-    command?: string
-    pattern?: string
-    query?: string
-    [key: string]: unknown
-  }
-}
 
 export interface ObservedQuestionOption {
   label: string
@@ -135,44 +85,42 @@ export interface ObservedQuestionRequest {
   questions: ObservedQuestion[]
 }
 
-export interface ToolResultBlock {
-  type: 'tool_result'
-  tool_use_id: string
-  content: string | { type: string; text?: string }[]
-  is_error?: boolean
+// ============================================================================
+// Hook Event Types (from Claude Code hooks via HTTP POST)
+// ============================================================================
+
+/**
+ * Hook event payload received from Claude Code hooks.
+ * Each hook POST contains the session_id and event-specific fields.
+ */
+export interface HookEventPayload {
+  session_id: string
+  tool_name?: string
+  tool_input?: Record<string, unknown>
+  tool_response?: Record<string, unknown>
+  [key: string]: unknown // event-specific fields
 }
 
-export interface AssistantMessageEvent extends TranscriptEvent {
-  type: 'assistant'
-  message: {
-    model?: string
-    usage?: {
-      input_tokens?: number
-      output_tokens?: number
-      cache_read_input_tokens?: number
-      cache_creation_input_tokens?: number
-      output_tokens_details?: { thinking_tokens?: number }
-    }
-    content: unknown[]
-    stop_reason?: string | null
-  }
-}
-
-export interface UserMessageEvent extends TranscriptEvent {
-  type: 'user'
-  message: {
-    content: unknown[] | string
-  }
-  toolUseResult?: unknown
-}
-
-export interface TokenReminderAttachment extends TranscriptEvent {
-  type: 'attachment'
-  attachment: {
-    type: 'total_tokens_reminder'
-    text: string
-  }
-}
+/**
+ * Hook event types that ORBIT subscribes to.
+ */
+export type OrbitHookEventType =
+  | 'SessionStart'
+  | 'SessionEnd'
+  | 'Stop'
+  | 'PreToolUse'
+  | 'PostToolUse'
+  | 'UserPromptSubmit'
+  | 'PermissionRequest'
+  | 'PermissionDenied'
+  | 'Elicitation'
+  | 'ElicitationResult'
+  | 'PostModelSwitch'
+  | 'PreCompact'
+  | 'PostCompact'
+  | 'SubagentStart'
+  | 'SubagentStop'
+  | 'MessageDisplay'
 
 // ============================================================================
 // Aggregated Session State
@@ -248,27 +196,6 @@ export interface ClaudeSessionState {
   lastToolFinishedAt?: number
 }
 
-// ============================================================================
-// Configuration
-// ============================================================================
-
-export interface ObservationConfig {
-  discoveryInterval: number // Default 3000ms
-  transcriptEnabled: boolean // Default true
-  maxActivityHistory: number // Default 20
-  fallbackMode: 'graceful' | 'strict' // Default graceful
-  useFilesystemWatching: boolean // Default true
-  pollingFallbackInterval: number // Default 1000ms (when fs.watch fails)
-}
-
-export const DEFAULT_OBSERVATION_CONFIG: ObservationConfig = {
-  discoveryInterval: 3000,
-  transcriptEnabled: true,
-  maxActivityHistory: 20,
-  fallbackMode: 'graceful',
-  useFilesystemWatching: true,
-  pollingFallbackInterval: 1000
-}
 
 // ============================================================================
 // Error Types
