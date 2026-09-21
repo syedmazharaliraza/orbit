@@ -41,12 +41,17 @@ async function ensureHooksInstalled(): Promise<void> {
     console.log('[Orbit] Hooks not installed, installing automatically...')
 
     // Find the collector binary
-    // In development: .build/orbit-claude-hook-collector
-    // In production: app.getAppPath()/resources/orbit-claude-hook-collector
+    // In development: .build/orbit-claude-hook-collector (relative to app directory)
+    // In production: process.resourcesPath/orbit-claude-hook-collector
     const isDev = !app.isPackaged
     const collectorSource = isDev
-      ? join(process.cwd(), '.build', 'orbit-claude-hook-collector')
+      ? join(app.getAppPath(), '.build', 'orbit-claude-hook-collector')
       : join(process.resourcesPath, 'orbit-claude-hook-collector')
+
+    console.log('[Orbit] Attempting hook installation...')
+    console.log('[Orbit] App path:', app.getAppPath())
+    console.log('[Orbit] Collector source:', collectorSource)
+    console.log('[Orbit] Observation root:', observationRoot)
 
     const result = await installHooks({
       observationRoot,
@@ -57,6 +62,9 @@ async function ensureHooksInstalled(): Promise<void> {
       console.log('[Orbit] Hooks installed successfully:', result.message)
     } else {
       console.error('[Orbit] Hook installation failed:', result.message)
+      if (isDev) {
+        console.error('[Orbit] Development mode - ensure you have run "npm run build:collector"')
+      }
       // Don't throw - allow the app to continue with recovery mode
     }
   } catch (error) {

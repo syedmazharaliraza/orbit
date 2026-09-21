@@ -109,10 +109,17 @@ export async function installHooks(options: HookInstallerOptions): Promise<HookI
     try {
       const sourceStat = await stat(options.collectorSource)
       if (!sourceStat.isFile() || (sourceStat.mode & 0o111) === 0) {
-        return { success: false, message: 'Collector source is missing or not executable.' }
+        return {
+          success: false,
+          message: `Collector source is missing or not executable at: ${options.collectorSource}. In development, run "npm run build:collector" first.`
+        }
       }
     } catch (error) {
-      return { success: false, message: `Cannot access collector source: ${error instanceof Error ? error.message : String(error)}` }
+      const errorMsg = error instanceof Error ? error.message : String(error)
+      return {
+        success: false,
+        message: `Cannot access collector source at ${options.collectorSource}: ${errorMsg}`
+      }
     }
 
     // Read existing settings

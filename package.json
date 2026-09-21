@@ -5,7 +5,7 @@
   "description": "Orbit Stage 1 floating visual shell",
   "main": "out/main/index.js",
   "scripts": {
-    "dev": "env -u ELECTRON_RUN_AS_NODE electron-vite dev",
+    "dev": "npm run build:collector && env -u ELECTRON_RUN_AS_NODE electron-vite dev",
     "build": "npm run build:collector && electron-vite build",
     "build:collector": "mkdir -p .build && swiftc -O -framework CryptoKit native/OrbitHookCollector/main.swift -o .build/orbit-claude-hook-collector",
     "hooks:preview": "node scripts/claude-hooks.mjs",
