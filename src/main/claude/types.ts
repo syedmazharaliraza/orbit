@@ -7,6 +7,10 @@ import type { Worker } from '../../renderer/src/crew'
 
 export type Activity = { time: string; text: string; current?: boolean; observedAt?: number }
 export type ClaudeSessionStatus = 'busy' | 'idle' | 'waiting'
+export type ObservationCoverage = 'hooks-seen' | 'recovery-only' | 'partial' | 'disabled' | 'stale'
+export type InteractionEvidence = 'requested' | 'confirmed-waiting' | 'resolved' | 'unknown'
+export type InteractionKind = 'question' | 'permission' | 'elicitation' | 'other-input' | 'unknown'
+export type SessionLifecycle = 'unknown' | 'live' | 'ended'
 
 export interface ObservedToolSummary {
   name: string
@@ -41,14 +45,6 @@ export interface DiscoveredSession {
   waitingFor?: string
 }
 
-export type SessionDiscoveryEventType = 'added' | 'removed' | 'status-changed'
-
-export interface SessionDiscoveryEvent {
-  type: SessionDiscoveryEventType
-  session: DiscoveredSession
-  previousStatus?: ClaudeSessionStatus
-}
-
 // ============================================================================
 // Session Metadata Types (from ~/.claude/sessions/<pid>.json)
 // ============================================================================
@@ -63,60 +59,6 @@ export interface SessionMetadata extends DiscoveredSession {
   entrypoint: string
   pidDomain: string
   waitingFor?: string
-}
-
-// ============================================================================
-// History Types (from ~/.claude/history.jsonl)
-// ============================================================================
-
-export interface HistoryEntry {
-  display: string
-  timestamp: number
-  project: string
-  sessionId: string
-}
-
-// ============================================================================
-// Transcript Types (from ~/.claude/projects/<encoded>/<sessionId>.jsonl)
-// ============================================================================
-
-export interface TranscriptCheckpoint {
-  sessionId: string
-  byteOffset: number
-  lastEventUuid: string | null
-  lastUpdated: number
-}
-
-export interface TranscriptEvent {
-  type: string
-  uuid: string
-  parentUuid?: string
-  timestamp: string
-  sessionId: string
-  cwd?: string
-  gitBranch?: string
-  [key: string]: unknown
-}
-
-export interface LastPromptEvent extends TranscriptEvent {
-  type: 'last-prompt'
-  lastPrompt?: string
-  leafUuid?: string
-}
-
-export interface ToolUseBlock {
-  type: 'tool_use'
-  id: string
-  name: string
-  input: {
-    file_path?: string
-    path?: string
-    notebook_path?: string
-    command?: string
-    pattern?: string
-    query?: string
-    [key: string]: unknown
-  }
 }
 
 export interface ObservedQuestionOption {
@@ -135,51 +77,12 @@ export interface ObservedQuestionRequest {
   questions: ObservedQuestion[]
 }
 
-export interface ToolResultBlock {
-  type: 'tool_result'
-  tool_use_id: string
-  content: string | { type: string; text?: string }[]
-  is_error?: boolean
-}
-
-export interface AssistantMessageEvent extends TranscriptEvent {
-  type: 'assistant'
-  message: {
-    model?: string
-    usage?: {
-      input_tokens?: number
-      output_tokens?: number
-      cache_read_input_tokens?: number
-      cache_creation_input_tokens?: number
-      output_tokens_details?: { thinking_tokens?: number }
-    }
-    content: unknown[]
-    stop_reason?: string | null
-  }
-}
-
-export interface UserMessageEvent extends TranscriptEvent {
-  type: 'user'
-  message: {
-    content: unknown[] | string
-  }
-  toolUseResult?: unknown
-}
-
-export interface TokenReminderAttachment extends TranscriptEvent {
-  type: 'attachment'
-  attachment: {
-    type: 'total_tokens_reminder'
-    text: string
-  }
-}
-
 // ============================================================================
 // Aggregated Session State
 // ============================================================================
 
 /**
- * A stable, user-facing interpretation of the transcript. This is deliberately
+ * A stable, user-facing interpretation of normalized observations. This is deliberately
  * coarser than Claude's event stream: several raw events may describe one UI
  * action, and a phase is retained until a meaningful transition occurs.
  */
@@ -194,12 +97,19 @@ export type ClaudeActivityPhase =
   | 'waiting'
   | 'permission'
   | 'idle'
+  | 'compacting'
+  | 'response-end-pending'
+  | 'response-finished'
+  | 'failed'
+  | 'ended'
+  | 'unknown'
 
 export type ToolLifecycle = 'active' | 'finished'
 
 export interface ObservedPermissionRequest {
   command: string
   question: string
+  evidence?: InteractionEvidence
 }
 
 export interface ClaudeSessionState {
@@ -246,43 +156,18 @@ export interface ClaudeSessionState {
   lastActivityAt?: number
   /** Timestamp of the most recent completed tool call. */
   lastToolFinishedAt?: number
-}
-
-// ============================================================================
-// Configuration
-// ============================================================================
-
-export interface ObservationConfig {
-  discoveryInterval: number // Default 3000ms
-  transcriptEnabled: boolean // Default true
-  maxActivityHistory: number // Default 20
-  fallbackMode: 'graceful' | 'strict' // Default graceful
-  useFilesystemWatching: boolean // Default true
-  pollingFallbackInterval: number // Default 1000ms (when fs.watch fails)
-}
-
-export const DEFAULT_OBSERVATION_CONFIG: ObservationConfig = {
-  discoveryInterval: 3000,
-  transcriptEnabled: true,
-  maxActivityHistory: 20,
-  fallbackMode: 'graceful',
-  useFilesystemWatching: true,
-  pollingFallbackInterval: 1000
-}
-
-// ============================================================================
-// Error Types
-// ============================================================================
-
-export class ClaudeObservationError extends Error {
-  constructor(
-    message: string,
-    public readonly code: string,
-    public readonly sessionId?: string
-  ) {
-    super(message)
-    this.name = 'ClaudeObservationError'
-  }
+  /** Hook/recovery coverage is independent from the user-facing activity state. */
+  coverage?: ObservationCoverage
+  lifecycle?: SessionLifecycle
+  interactionEvidence?: InteractionEvidence
+  interactionKind?: InteractionKind
+  responseFinishedAt?: number
+  lastEventAt?: number
+  failure?: string
+  incarnationId?: string
+  configRootId?: string
+  activeChildCount?: number
+  waitingChildCount?: number
 }
 
 // ============================================================================

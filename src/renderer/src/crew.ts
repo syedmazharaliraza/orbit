@@ -16,7 +16,7 @@ export type Worker = {
   id: string; name: string; action: string; task: string; hue: number; mark: Mark; state: WorkerState; presentation: PresentationState; priority: Priority; elapsed: string; delay: string
   repo: string; branch: string; model: string; effort: string; file: string; path: string; edit: string; fileTag: FileTag
   tool: string; context: string; cost: string; activity: Activity[]; message: string; budget?: number; tools?: ToolSummary[]; relevantFiles?: string[]; usage?: Usage; promptContext?: string; waitingFor?: string
-  progress?: Progress; filesGiven?: string[]; foundFiles?: number; permission?: Permission; question?: Question; signal?: Signal
+  progress?: Progress; filesGiven?: string[]; foundFiles?: number; permission?: Permission; question?: Question; signal?: Signal; canOpenSession?: boolean
 }
 
 export const crew: Worker[] = [

@@ -6,6 +6,7 @@ declare global {
   interface Window {
     orbit: {
       getWorkers(): Promise<Worker[]>
+      openSession(sessionId: string): Promise<{ ok: boolean; mode?: 'application'; message: string }>
       setMode(mode: 'collapsed' | 'orbit' | 'preview' | 'detail' | 'empty'): Promise<void>
       dragStart(position: { x: number; y: number }): Promise<{ x: number; y: number }>
       dragMove(position: { x: number; y: number }): Promise<void>

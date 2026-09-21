@@ -1,6 +1,7 @@
 # Dependencies and generated Electron/Vite output
 node_modules/
 out/
+.build/
 
 # Local environment and editor files
 .env

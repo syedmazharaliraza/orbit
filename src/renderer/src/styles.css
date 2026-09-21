@@ -86,6 +86,8 @@ button { color: inherit; font: inherit; border: 0; cursor: pointer; }
 .worker-detail footer button { transition:transform 120ms ease, background 120ms ease; }
 .worker-detail footer button:active, .permission button:active, .heuristic button:active, .given-files button:active { transform:scale(.96); }
 .worker-detail footer .reply-mic { width:30px; height:30px; position:relative; flex:0 0 auto; padding:0; border-radius:50%; background:oklch(.62 .15 250); }
+.worker-detail footer .open-session { background:oklch(.62 .15 250); color:oklch(.99 .005 265); box-shadow:none; }
+.worker-detail footer .open-session:disabled { cursor:default; opacity:.45; }
 .heuristic-files { display:flex; flex-wrap:wrap; gap:5px; font:9px 'JetBrains Mono', monospace; color:oklch(.48 .02 265); }
 .heuristic-files span { padding:4px 7px; border-radius:6px; background:oklch(.97 .018 305); }
 .heuristic-files span.related { background:oklch(.99 .004 250); }

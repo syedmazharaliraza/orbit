@@ -61,7 +61,8 @@ export class ClaudeSessionToWorkerAdapter {
       permission: session.permission,
       question: session.question,
       waitingFor: session.waitingFor,
-      signal: attention.signal
+      signal: attention.signal,
+      canOpenSession: session.pid > 0 && session.lifecycle !== 'ended'
     }
   }
 

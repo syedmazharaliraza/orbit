@@ -119,7 +119,7 @@ function createWindow(): void {
     startPointerMonitor()
     if (window && !mockAttentionWorkers()) {
       workerManager = new WorkerManager()
-      await workerManager.initialize(window)
+      await workerManager.initialize(window, join(app.getPath('appData'), 'Orbit', 'claude-observation'))
       workerManager.on('integration-error', (error: Error) => console.error('[Orbit observation]', error))
     }
     if (process.env.ORBIT_FIXTURE === 'empty') setMode('empty')
@@ -142,6 +142,8 @@ app.whenReady().then(async () => {
   const pointSchema = z.object({ x: z.number(), y: z.number() })
   ipcMain.handle('orbit:set-mode', (_event, value: unknown) => setMode(modeSchema.parse(value)))
   ipcMain.handle('orbit:get-workers', () => mockAttentionWorkers() || workerManager?.getWorkerSnapshot() || [])
+  ipcMain.handle('orbit:open-session', (_event, value: unknown) =>
+    workerManager?.openSession(z.string().min(1).max(512).parse(value)) || { ok: false, message: 'Orbit session observation is unavailable.' })
   ipcMain.handle('orbit:drag-start', (_event, value: unknown) => {
     if (!window || window.isDestroyed() || dragging || mode !== 'collapsed') return { x: 0, y: 0 }
     pointSchema.parse(value)

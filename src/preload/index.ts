@@ -4,6 +4,7 @@ type Mode = 'collapsed' | 'orbit' | 'preview' | 'detail' | 'empty'
 
 contextBridge.exposeInMainWorld('orbit', {
   getWorkers: () => ipcRenderer.invoke('orbit:get-workers'),
+  openSession: (sessionId: string) => ipcRenderer.invoke('orbit:open-session', sessionId),
   setMode: (mode: Mode) => ipcRenderer.invoke('orbit:set-mode', mode),
   dragStart: (position: { x: number; y: number }) => ipcRenderer.invoke('orbit:drag-start', position),
   dragMove: (position: { x: number; y: number }) => ipcRenderer.invoke('orbit:drag-move', position),

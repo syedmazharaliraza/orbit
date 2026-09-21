@@ -3,63 +3,82 @@ import { EventEmitter } from 'node:events'
 import { BrowserWindow } from 'electron'
 import type { Worker } from '../../renderer/src/crew'
 import type { ClaudeSessionState } from './types'
-import { ClaudeCodeSessionObserver } from './ClaudeCodeSessionObserver'
 import { ClaudeSessionToWorkerAdapter } from './ClaudeSessionToWorkerAdapter'
+import { HookObservationService } from './hooks/HookObservationService'
+import { SessionOpener, type OpenSessionResult } from './SessionOpener'
 
 export class WorkerManager extends EventEmitter {
   private readonly useRealSessions = process.env.ORBIT_USE_MOCK_WORKERS !== 'true'
-  private observer: ClaudeCodeSessionObserver | undefined
+  private observer: HookObservationService | undefined
   private readonly adapter = new ClaudeSessionToWorkerAdapter()
   private readonly workers = new Map<string, Worker>()
+  private readonly states = new Map<string, ClaudeSessionState>()
+  private readonly sessionOpener = new SessionOpener()
   private window: BrowserWindow | undefined
   private publishTimeout: NodeJS.Timeout | undefined
-  private attentionRefreshInterval: NodeJS.Timeout | undefined
+  private readonly displayDeadlines = new Map<string, NodeJS.Timeout>()
 
-  async initialize(window: BrowserWindow): Promise<void> {
+  async initialize(window: BrowserWindow, observationRoot: string): Promise<void> {
     this.window = window
     if (!this.useRealSessions) return this.initializeMockWorkers()
 
-    this.observer = new ClaudeCodeSessionObserver({
-      discoveryInterval: 3_000,
-      transcriptEnabled: true,
-      maxActivityHistory: 20,
-      useFilesystemWatching: true
-    })
+    this.observer = new HookObservationService(observationRoot)
     this.observer.on('session-state-updated', (state: ClaudeSessionState) => this.updateObservedWorker(state))
-    this.observer.on('session-removed', (sessionId: string) => {
-      this.workers.delete(sessionId)
-      this.publish()
-    })
     this.observer.on('error', (error: Error) => this.emit('integration-error', error))
-    this.observer.start()
-    // Time-based heuristic labels may age without a new filesystem event.
-    this.attentionRefreshInterval = setInterval(() => this.refreshObservedWorkers(), 5_000)
+    this.observer.on('coverage-degraded', (error: Error) => this.emit('integration-error', error))
+    await this.observer.start()
     this.publish()
   }
 
   getWorkerSnapshot(): Worker[] { return Array.from(this.workers.values()) }
   isUsingRealSessions(): boolean { return this.useRealSessions }
+  async openSession(sessionId: string): Promise<OpenSessionResult> {
+    const state = this.states.get(sessionId)
+    if (!state || state.lifecycle === 'ended') return { ok: false, message: 'This Claude session is no longer available.' }
+    return this.sessionOpener.focus(state.pid)
+  }
 
   stop(): void {
     if (this.publishTimeout) clearTimeout(this.publishTimeout)
-    if (this.attentionRefreshInterval) clearInterval(this.attentionRefreshInterval)
+    for (const deadline of this.displayDeadlines.values()) clearTimeout(deadline)
     this.publishTimeout = undefined
-    this.attentionRefreshInterval = undefined
+    this.displayDeadlines.clear()
     this.observer?.stop()
     this.observer = undefined
     this.workers.clear()
+    this.states.clear()
     this.window = undefined
     this.removeAllListeners()
   }
 
   private updateObservedWorker(state: ClaudeSessionState): void {
+    if (state.lifecycle === 'ended') {
+      const deadline = this.displayDeadlines.get(state.sessionId)
+      if (deadline) clearTimeout(deadline)
+      this.displayDeadlines.delete(state.sessionId)
+      this.workers.delete(state.sessionId)
+      this.states.delete(state.sessionId)
+      this.schedulePublish()
+      return
+    }
+    this.states.set(state.sessionId, state)
     this.workers.set(state.sessionId, this.adapter.toWorker(state))
+    this.scheduleDisplayDeadline(state)
     this.schedulePublish()
   }
 
-  private refreshObservedWorkers(): void {
-    for (const state of this.observer?.getAllSessionStates() || []) this.workers.set(state.sessionId, this.adapter.toWorker(state))
-    this.schedulePublish()
+  private scheduleDisplayDeadline(state: ClaudeSessionState): void {
+    const previous = this.displayDeadlines.get(state.sessionId)
+    if (previous) clearTimeout(previous)
+    this.displayDeadlines.delete(state.sessionId)
+    if (!state.responseFinishedAt) return
+    const delay = Math.max(0, state.responseFinishedAt + 20_000 - Date.now())
+    if (delay === 0) return
+    this.displayDeadlines.set(state.sessionId, setTimeout(() => {
+      this.displayDeadlines.delete(state.sessionId)
+      const current = this.observer?.snapshots().find(item => item.sessionId === state.sessionId)
+      if (current) { this.workers.set(current.sessionId, this.adapter.toWorker(current)); this.schedulePublish() }
+    }, delay))
   }
 
   private schedulePublish(): void {

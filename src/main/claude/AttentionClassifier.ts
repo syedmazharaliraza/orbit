@@ -27,7 +27,7 @@ export type AttentionDecision = {
 
 export function classifySessionAttention(session: ClaudeSessionState, now = Date.now()): AttentionDecision {
   // A permission observation is stronger than all other attention signals.
-  if (session.permission || session.activityPhase === 'permission') {
+  if (session.permission?.evidence === 'confirmed-waiting' || session.activityPhase === 'permission') {
     return { state: 'waiting', presentation: 'waiting', priority: 'P1' }
   }
 
