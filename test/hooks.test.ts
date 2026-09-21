@@ -86,7 +86,7 @@ assert.equal(workerActivity(testing), 'Running tests')
 assert.equal(workerTitle(testing), 'Fix login navigation', 'Claude’s title takes precedence and is not split at hyphens')
 assert.equal(workerActivity(apply('PostToolUse', { ...fresh, tool_use_id: 'test-preview', tool_name: 'Bash' })), 'Thinking')
 assert.equal(workerActivity(questionRequested), 'Choose one')
-assert.equal(workerActivity(permissionConfirmed), 'Approve command?')
+assert.equal(workerActivity(permissionConfirmed), 'Run printf ok?')
 const completionWithoutMessage = apply('Stop', fresh)
 assert.equal(workerActivity(completionWithoutMessage), 'Completed', 'a missing final message must not reuse an old task’s output')
 const adapter = new ClaudeSessionToWorkerAdapter()
@@ -164,4 +164,48 @@ assert.equal(workerTitle({ ...titleSession, initialTask: '&lt;pasted_content id=
 assert.equal(workerTitle({ ...titleSession, initialTask: '<pasted_content id="a"/>', lastPrompt: 'Debug payments API' }), 'Debug payments API')
 assert.equal(workerTitle({ ...titleSession, initialTask: 'Fix auth redirect', sessionTitle: '<pasted_content id="a"/>' }), 'Fix auth redirect')
 assert.equal(workerTitle({ ...titleSession, initialTask: '<pasted_content id="a">Fix auth</pasted_content>', sessionTitle: 'Login navigation' }), 'Login navigation')
+assert.equal(workerTitle({ ...titleSession, initialTask: '[Image #2]\n\nthere is one session where the permission is being asked' }), 'There is one session where the permission…', 'image references should be filtered from titles')
+assert.equal(workerTitle({ ...titleSession, initialTask: '[Image #1] [Image #2] Fix the bug' }), 'Fix the bug', 'multiple image references should be filtered')
+
+// Test URL removal
+assert.equal(workerTitle({ ...titleSession, initialTask: 'Check https://example.com/api/endpoint for the bug' }), 'Check for the bug', 'URLs should be removed from titles')
+assert.equal(workerTitle({ ...titleSession, initialTask: 'Deploy to https://staging.example.com' }), 'Deploy to', 'standalone URLs should be removed')
+
+// Test file path normalization
+assert.equal(workerTitle({ ...titleSession, initialTask: 'Fix /very/long/path/to/src/components/Auth.tsx' }), 'Fix Auth.tsx', 'long paths should be normalized to filename')
+assert.equal(workerTitle({ ...titleSession, initialTask: 'Update /app/models/user.rb and test it' }), 'Update user.rb and test it', 'paths in middle of sentence should be normalized')
+
+// Test markdown code block removal
+assert.equal(workerTitle({ ...titleSession, initialTask: 'Fix this ```const x = 1``` issue' }), 'Fix this issue', 'inline code should be removed')
+assert.equal(workerTitle({ ...titleSession, initialTask: '```typescript\nconst broken = true\n```\nFix the above' }), 'Fix the above', 'code blocks should be removed')
+
+// Test markdown syntax removal
+assert.equal(workerTitle({ ...titleSession, initialTask: '### Fix the authentication\n\nDetails below' }), 'Fix the authentication', 'markdown headers should be removed')
+assert.equal(workerTitle({ ...titleSession, initialTask: '> Fix the bug\n> in production' }), 'Fix the bug', 'blockquotes should be removed')
+assert.equal(workerTitle({ ...titleSession, initialTask: '- Fix auth\n- Update tests' }), 'Fix auth', 'list markers should be removed')
+
+// Test timestamp removal
+assert.equal(workerTitle({ ...titleSession, initialTask: '[2024-01-01 10:30:15] Fix the bug' }), 'Fix the bug', 'timestamps should be removed')
+assert.equal(workerTitle({ ...titleSession, initialTask: 'Bug reported at (10:30 AM) - fix it' }), 'Bug reported at - fix it', 'time markers should be removed')
+
+// Test command prefix removal
+assert.equal(workerTitle({ ...titleSession, initialTask: '/search for auth bugs' }), 'For auth bugs', 'slash commands should be removed')
+assert.equal(workerTitle({ ...titleSession, initialTask: '@claude fix the login flow' }), 'Fix the login flow', 'mentions should be removed')
+
+// Test file attachment references
+assert.equal(workerTitle({ ...titleSession, initialTask: '[Attachment: document.pdf] Review this' }), 'Review this', 'attachment references should be removed')
+assert.equal(workerTitle({ ...titleSession, initialTask: '[screenshot.png] Fix the UI bug' }), 'Fix the UI bug', 'file references should be removed')
+
+// Test excessive whitespace
+assert.equal(workerTitle({ ...titleSession, initialTask: 'Fix    the     bug' }), 'Fix the bug', 'multiple spaces should be normalized')
+assert.equal(workerTitle({ ...titleSession, initialTask: '\n\n\nFix the bug\n\n\n' }), 'Fix the bug', 'excessive newlines should be normalized')
+
+// Test combined issues
+assert.equal(workerTitle({ ...titleSession, initialTask: '[Image #1] https://example.com ```code``` Fix /path/to/file.tsx' }), 'Fix file.tsx', 'multiple issues should all be cleaned')
+assert.equal(workerTitle({ ...titleSession, initialTask: '### [Attachment: file.pdf] @user /command Fix the bug' }), 'Fix the bug', 'complex combined patterns should be cleaned')
+
+// Test edge cases
+assert.equal(workerTitle({ ...titleSession, initialTask: '   \n\n   ' }), 'Claude Code session', 'whitespace-only prompts should use fallback')
+assert.equal(workerTitle({ ...titleSession, initialTask: '[Image #1] [Image #2] [Image #3]' }), 'Claude Code session', 'only-noise prompts should use fallback')
+
 console.log('hook reducer and worker preview tests passed')

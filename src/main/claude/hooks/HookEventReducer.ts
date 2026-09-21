@@ -327,7 +327,7 @@ export class HookEventReducer {
     state.waitingFor = focus.kind
     if (focus.evidence === 'confirmed-waiting') { state.status = 'waiting'; state.activityPhase = focus.kind === 'permission' ? 'permission' : 'waiting' }
     state.permission = focus.kind === 'permission' ? {
-      command: value(focus.data, 'command') || value(focus.data, 'file') || value(focus.data, 'toolName') || 'tool action',
+      command: buildPermissionCommand(focus.data),
       detail: value(focus.data, 'description'),
       question: value(focus.data, 'description') || permissionPreview(focus.data),
       evidence: focus.evidence
@@ -360,11 +360,53 @@ function toolPhase(name: string): ClaudeSessionState['activityPhase'] { return t
 function parseQuestions(input: Record<string, unknown>): ObservedQuestionRequest | undefined { const questions = input.questions; return Array.isArray(questions) && questions.length ? { questions: questions as ObservedQuestionRequest['questions'] } : undefined }
 function humanize(value: string): string { return value.replace(/([a-z])([A-Z])/g, '$1 $2').toLowerCase() }
 
+function buildPermissionCommand(data: Record<string, unknown>): string {
+  const toolName = value(data, 'toolName')
+  const command = value(data, 'command')
+  const file = value(data, 'file')
+
+  // For Bash commands, use the actual command
+  if (toolName === 'Bash' && command) return command
+
+  // For file operations, show the file name
+  if (file && /^(Edit|Write|NotebookEdit|Read)$/.test(toolName || '')) return basename(file)
+
+  // Use command preview if available
+  if (command) return command
+
+  // Use file path if available
+  if (file) return basename(file)
+
+  // Fall back to tool name or generic text
+  return toolName || 'tool action'
+}
+
 function permissionPreview(data: Record<string, unknown>): string {
   const tool = value(data, 'toolName') || ''
   const file = value(data, 'file')
+  const command = value(data, 'command')
+  const description = value(data, 'description')
+
+  // Use description if available as it's often the most informative
+  if (description) return description
+
+  // File operations
   if (/^(Edit|Write|NotebookEdit)$/.test(tool)) return file ? `Approve editing ${basename(file)}?` : 'Approve file changes?'
   if (tool === 'Read') return file ? `Allow reading ${basename(file)}?` : 'Allow file access?'
-  if (tool === 'Bash') return 'Approve command?'
-  return tool && tool !== 'tool action' ? `Allow ${tool}?` : 'Waiting for permission'
+
+  // Bash command - show the actual command if available
+  if (tool === 'Bash') {
+    if (command) return `Run ${command}?`
+    return 'Approve command?'
+  }
+
+  // For other tools, show the tool name with context if available
+  if (tool && tool !== 'tool action') {
+    if (command) return `${tool}: ${command}?`
+    return `Allow ${tool}?`
+  }
+
+  // Fallback - try to show something useful
+  if (command) return `Allow ${command}?`
+  return 'Waiting for permission'
 }

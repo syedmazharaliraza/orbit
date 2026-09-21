@@ -33,14 +33,88 @@ export function previewLine(text: string): string {
     .replace(/(\*\*|__)(.*?)\1/g, '$2').replace(/^[\s#>*-]+/, '').replace(/`/g, '').replace(/\s+/g, ' ').trim()
 }
 
-/** Pasted text is useful task context; its transport wrapper is not a title. */
-function titleContent(text?: string): string {
-  return (text || '')
+// ============================================================================
+// Title Cleaning Utilities
+// ============================================================================
+
+/** Remove media references like [Image #1], [file.pdf], [Attachment: ...] */
+function removeMediaReferences(text: string): string {
+  return text
+    .replace(/\[Image #\d+\]/gi, '')
+    .replace(/\[Attachment:\s*[^\]]+\]/gi, '')
+    .replace(/\[[\w.-]+\.(pdf|png|jpg|jpeg|gif|svg|mp4|mov|zip|tar|gz)\]/gi, '')
+}
+
+/** Remove or normalize pasted content tags */
+function removePastedContentTags(text: string): string {
+  return text
     .replace(/&lt;(\/?pasted_content\b[^]*?)&gt;/gi, '<$1>')
     .replace(/<\/?pasted_content\b[^>]*>/gi, '\n')
-    // The collector bounds prompts, so a long marker can arrive incomplete.
-    .replace(/<\/?pasted_content\b[^>]*$/gi, '')
+    .replace(/<\/?pasted_content\b[^>]*$/gi, '') // Incomplete tags
+}
+
+/** Remove markdown syntax (code blocks, headers, lists) */
+function removeMarkdownSyntax(text: string): string {
+  return text
+    .replace(/```[\s\S]*?```/g, '') // Code blocks
+    .replace(/`[^`]+`/g, '') // Inline code
+    .replace(/^#{1,6}\s+/gm, '') // Headers
+    .replace(/^[>*-]\s+/gm, '') // Blockquotes and lists
+}
+
+/** Remove or shorten URLs to avoid them dominating the title */
+function removeURLs(text: string): string {
+  // Remove full URLs
+  return text.replace(/https?:\/\/[^\s]+/gi, '')
+}
+
+/** Normalize file paths to just the filename */
+function normalizePaths(text: string): string {
+  // Replace long paths with just the filename
+  return text.replace(/(?:\/[\w.-]+){3,}/g, (match) => {
+    const parts = match.split('/')
+    return parts[parts.length - 1] || ''
+  })
+}
+
+/** Remove timestamps like [2024-01-01 10:30:15] or (10:30 AM) */
+function removeTimestamps(text: string): string {
+  return text
+    .replace(/\[\d{4}-\d{2}-\d{2}[^\]]*\]/g, '')
+    .replace(/\(\d{1,2}:\d{2}(?::\d{2})?\s*(?:AM|PM)?\)/gi, '')
+}
+
+/** Remove slash commands and mentions */
+function removeCommandPrefixes(text: string): string {
+  return text
+    .replace(/\/[\w-]+\s+/g, '') // /command followed by space
+    .replace(/@[\w-]+\s*/g, '') // @mentions
+}
+
+/** Normalize excessive whitespace (but preserve newlines for line extraction) */
+function normalizeWhitespace(text: string): string {
+  return text
+    .replace(/[ \t]+/g, ' ') // Multiple spaces/tabs to single space
+    .replace(/\n{3,}/g, '\n\n') // Multiple newlines to double
     .trim()
+}
+
+/** Pasted text is useful task context; its transport wrapper is not a title. */
+function titleContent(text?: string): string {
+  if (!text) return ''
+
+  // Apply cleaning pipeline
+  let cleaned = text
+  cleaned = removeMediaReferences(cleaned)
+  cleaned = removePastedContentTags(cleaned)
+  cleaned = removeMarkdownSyntax(cleaned)
+  cleaned = removeURLs(cleaned)
+  cleaned = normalizePaths(cleaned)
+  cleaned = removeTimestamps(cleaned)
+  cleaned = removeCommandPrefixes(cleaned)
+  cleaned = normalizeWhitespace(cleaned)
+
+  return cleaned
 }
 
 export function workerTitle(session: ClaudeSessionState): string {
