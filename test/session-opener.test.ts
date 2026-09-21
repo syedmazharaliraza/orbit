@@ -1,5 +1,5 @@
 import assert from 'node:assert/strict'
-import { SessionOpener, parseProcessTable } from '../src/main/claude/SessionOpener'
+import { SessionOpener, parseProcessTable, terminalFocusScript, itermFocusScript } from '../src/main/claude/SessionOpener'
 
 async function main() {
   const table = `  501     1 /System/Applications/Utilities/Terminal.app/Contents/MacOS/Terminal
@@ -12,14 +12,38 @@ async function main() {
   const terminalCalls: Array<{ file: string; args: string[] }> = []
   const terminal = new SessionOpener(async (file, args) => {
     terminalCalls.push({ file, args })
-    if (file === '/bin/ps') return { stdout: table, stderr: '' }
+    if (file === '/bin/ps') return { stdout: args[0] === '-p' ? 'ttys007\n' : table, stderr: '' }
+    if (file === '/usr/bin/osascript') return { stdout: 'focused\n', stderr: '' }
     if (file === '/usr/bin/open') return { stdout: '', stderr: '' }
     throw new Error(`unexpected command: ${file}`)
   })
-  assert.deepEqual(await terminal.focus(701), { ok: true, mode: 'application', message: 'Focused Terminal.' })
-  assert.deepEqual(terminalCalls[1], { file: '/usr/bin/open', args: ['/System/Applications/Utilities/Terminal.app'] })
+  assert.deepEqual(await terminal.focus(701), { ok: true, mode: 'terminal', message: 'Focused Claude Code session.' })
+  assert.deepEqual(terminalCalls[1], { file: '/bin/ps', args: ['-p', '701', '-o', 'tty='] })
+  assert.deepEqual(terminalCalls[2], { file: '/usr/bin/osascript', args: ['-e', terminalFocusScript, '/dev/ttys007'] })
+  assert.equal(terminalCalls.some(call => call.file === '/usr/bin/open'), false, 'exact tab navigation must not open a generic window')
 
-  // No application names are known to SessionOpener. Any .app-backed host works.
+  const iterm = new SessionOpener(async (file, args) => {
+    if (file === '/bin/ps') return { stdout: args[0] === '-p' ? 'ttys009' : table.replace('/System/Applications/Utilities/Terminal.app/Contents/MacOS/Terminal', '/Applications/iTerm.app/Contents/MacOS/iTerm2'), stderr: '' }
+    assert.deepEqual(args, ['-e', itermFocusScript, '/dev/ttys009'])
+    return { stdout: 'focused', stderr: '' }
+  })
+  assert.equal((await iterm.focus(701)).mode, 'terminal')
+
+  for (const outcome of ['missing', 'denied']) {
+    const unavailable = new SessionOpener(async (file, args) => {
+      if (file === '/bin/ps') return { stdout: args[0] === '-p' ? 'ttys007' : table, stderr: '' }
+      assert.equal(file, '/usr/bin/osascript')
+      if (outcome === 'denied') throw new Error('Automation denied')
+      return { stdout: outcome, stderr: '' }
+    })
+    assert.equal((await unavailable.focus(701)).ok, false, 'do not silently navigate to the wrong tab')
+  }
+  const stale = new SessionOpener(async () => ({ stdout: table.replace('/Users/test/.local/bin/claude', '/bin/zsh'), stderr: '' }))
+  assert.equal((await stale.focus(701)).ok, false)
+  assert.equal((await stale.focus(999)).ok, false)
+  assert.equal((await stale.focus(0)).ok, false)
+
+  // Hosts without a tab interface still use the existing application fallback.
   const editorTable = `  900     1 /Applications/Acme Studio.app/Contents/MacOS/Acme Studio
   901   900 Acme Helper (Plugin): extension-host
   902   901 /Users/test/.local/bin/claude

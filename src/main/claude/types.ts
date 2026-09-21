@@ -3,8 +3,6 @@
  * Stage 6: Read-only observation of local Claude Code sessions
  */
 
-import type { Worker } from '../../renderer/src/crew'
-
 export type Activity = { time: string; text: string; current?: boolean; observedAt?: number }
 export type ClaudeSessionStatus = 'busy' | 'idle' | 'waiting'
 export type ObservationCoverage = 'hooks-seen' | 'recovery-only' | 'partial' | 'disabled' | 'stale'
@@ -109,6 +107,7 @@ export type ToolLifecycle = 'active' | 'finished'
 export interface ObservedPermissionRequest {
   command: string
   question: string
+  detail?: string
   evidence?: InteractionEvidence
 }
 
@@ -127,12 +126,20 @@ export interface ClaudeSessionState {
   version?: string
   statusUpdatedAt?: number
 
+  sessionTitle?: string
+  currentToolActivity?: string
+  currentCommand?: string
+  currentToolDescription?: string
+  currentSearch?: string
+  inputPreview?: string
+
   // From history.jsonl (optional)
   initialTask?: string
 
   // From transcript tailing (optional)
   lastPrompt?: string
   currentTool?: string
+  currentToolUseId?: string
   currentFile?: string
   fileOperation?: 'EDITING' | 'READING'
   activity?: Activity[]
@@ -168,16 +175,4 @@ export interface ClaudeSessionState {
   configRootId?: string
   activeChildCount?: number
   waitingChildCount?: number
-}
-
-// ============================================================================
-// Field Classification for Adapter
-// ============================================================================
-
-export type FieldSource = 'observed' | 'derived' | 'inferred' | 'mocked' | 'unavailable'
-
-export interface WorkerFieldMetadata {
-  field: keyof Worker
-  source: FieldSource
-  description: string
 }

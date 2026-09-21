@@ -13,7 +13,8 @@
     "hooks:uninstall": "node scripts/claude-hooks.mjs --uninstall",
     "test:hooks": "mkdir -p .build && esbuild test/hooks.test.ts --bundle --platform=node --format=cjs --outfile=.build/hooks.test.cjs && node .build/hooks.test.cjs && esbuild test/session-opener.test.ts --bundle --platform=node --format=cjs --outfile=.build/session-opener.test.cjs && node .build/session-opener.test.cjs",
     "preview": "electron-vite preview",
-    "package:mac": "npm run build && electron-builder --mac --arm64"
+    "package:mac": "npm run build && electron-builder --mac --arm64",
+    "test:preview": "npm run build && env -u ELECTRON_RUN_AS_NODE electron test/preview.electron.cjs"
   },
   "devDependencies": {
     "@types/node": "^22.15.3",

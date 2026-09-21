@@ -16,7 +16,6 @@ export class WorkerManager extends EventEmitter {
   private readonly sessionOpener = new SessionOpener()
   private window: BrowserWindow | undefined
   private publishTimeout: NodeJS.Timeout | undefined
-  private readonly displayDeadlines = new Map<string, NodeJS.Timeout>()
 
   async initialize(window: BrowserWindow, observationRoot: string): Promise<void> {
     this.window = window
@@ -40,9 +39,7 @@ export class WorkerManager extends EventEmitter {
 
   stop(): void {
     if (this.publishTimeout) clearTimeout(this.publishTimeout)
-    for (const deadline of this.displayDeadlines.values()) clearTimeout(deadline)
     this.publishTimeout = undefined
-    this.displayDeadlines.clear()
     this.observer?.stop()
     this.observer = undefined
     this.workers.clear()
@@ -53,9 +50,6 @@ export class WorkerManager extends EventEmitter {
 
   private updateObservedWorker(state: ClaudeSessionState): void {
     if (state.lifecycle === 'ended') {
-      const deadline = this.displayDeadlines.get(state.sessionId)
-      if (deadline) clearTimeout(deadline)
-      this.displayDeadlines.delete(state.sessionId)
       this.workers.delete(state.sessionId)
       this.states.delete(state.sessionId)
       this.schedulePublish()
@@ -63,22 +57,7 @@ export class WorkerManager extends EventEmitter {
     }
     this.states.set(state.sessionId, state)
     this.workers.set(state.sessionId, this.adapter.toWorker(state))
-    this.scheduleDisplayDeadline(state)
     this.schedulePublish()
-  }
-
-  private scheduleDisplayDeadline(state: ClaudeSessionState): void {
-    const previous = this.displayDeadlines.get(state.sessionId)
-    if (previous) clearTimeout(previous)
-    this.displayDeadlines.delete(state.sessionId)
-    if (!state.responseFinishedAt) return
-    const delay = Math.max(0, state.responseFinishedAt + 20_000 - Date.now())
-    if (delay === 0) return
-    this.displayDeadlines.set(state.sessionId, setTimeout(() => {
-      this.displayDeadlines.delete(state.sessionId)
-      const current = this.observer?.snapshots().find(item => item.sessionId === state.sessionId)
-      if (current) { this.workers.set(current.sessionId, this.adapter.toWorker(current)); this.schedulePublish() }
-    }, delay))
   }
 
   private schedulePublish(): void {
@@ -103,16 +82,16 @@ export class WorkerManager extends EventEmitter {
 /** Development-only fixtures for visually checking every collapsed state. */
 function mockWorkers(crew: Worker[], scenario?: string): Worker[] {
   const clone = (worker: Worker, patch: Partial<Worker> = {}): Worker => ({ ...worker, ...patch })
-  const quiet = (worker: Worker, state: Worker['state']): Worker => clone(worker, { state, signal: undefined, permission: undefined, question: undefined, waitingFor: undefined })
+  const quiet = (worker: Worker, state: Worker['state']): Worker => clone(worker, { state, presentation: state === 'done' ? 'done' : state === 'idle' ? 'idle' : 'working', signal: undefined, permission: undefined, question: undefined, waitingFor: undefined })
   switch (scenario) {
     case 'empty': return []
     case 'permission': return [clone(crew[0])]
-    case 'input': return [clone(crew[0], { permission: undefined, question: { questions: [{ question: 'Which migration should I use?', options: [] }] }, waitingFor: 'question', action: 'waiting for your answer' })]
+    case 'input': return [clone(crew[0], { permission: undefined, question: true, waitingFor: 'question', action: 'Which migration should I use?' })]
     case 'waiting': return [clone(crew[0], { permission: undefined, question: undefined, waitingFor: 'Claude Code paused', action: 'waiting' })]
     case 'check': return [clone(crew[3], { permission: undefined, question: undefined, waitingFor: undefined, state: 'stuck', signal: { kind: 'stuck', confidence: 62, evidence: 'Observed repeated tool activity.' } })]
     case 'many': return [
       clone(crew[0]),
-      clone(crew[1], { state: 'waiting', presentation: 'waiting', question: { questions: [{ question: 'Pick an approach.', options: [] }] }, waitingFor: 'question' }),
+      clone(crew[1], { state: 'waiting', presentation: 'waiting', question: true, action: 'Pick an approach.', waitingFor: 'question' }),
       clone(crew[3], { state: 'stuck', presentation: 'attention' })
     ]
     case 'working': return crew.slice(1, 3).map(worker => quiet(worker, 'working'))

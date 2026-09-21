@@ -12,7 +12,6 @@ import type { Worker, WorkerState, PresentationState, Priority, Signal } from '.
 import type { ClaudeSessionState } from './types'
 
 export const ATTENTION_RULES = {
-  recentlyCompletedMs: 20_000,
   inactiveAfterMs: 45_000,
   repeatedToolMinimum: 3,
   repeatedToolWindow: 6
@@ -36,10 +35,7 @@ export function classifySessionAttention(session: ClaudeSessionState, now = Date
   }
 
   if (session.status === 'idle') {
-    const sinceCompletion = session.lastToolFinishedAt ? now - session.lastToolFinishedAt : Number.POSITIVE_INFINITY
-    if (sinceCompletion >= 0 && sinceCompletion <= ATTENTION_RULES.recentlyCompletedMs) {
-      return { state: 'done', presentation: 'done', priority: 'P2' }
-    }
+    if (session.responseFinishedAt !== undefined) return { state: 'done', presentation: 'done', priority: 'P2' }
     return { state: 'idle', presentation: 'idle', priority: 'P3' }
   }
 

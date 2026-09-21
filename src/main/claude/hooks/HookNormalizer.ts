@@ -91,9 +91,11 @@ function minimize(kind: SupportedHookEvent, payload: Record<string, unknown>): R
       }) : []
       break
     case 'Notification':
+      data.message = text(payload.message, 512)
       data.notificationType = text(payload.notification_type, 128)
       break
     case 'Elicitation':
+      data.message = text(payload.message, 512)
       data.serverName = text(payload.server_name, 256)
       data.mode = text(payload.mode, 64)
       data.requestedFields = Object.keys(object(payload.request)).slice(0, 64)
@@ -135,12 +137,18 @@ function minimize(kind: SupportedHookEvent, payload: Record<string, unknown>): R
 
 function minimizeToolInput(input: Record<string, unknown>): Record<string, unknown> {
   const result: Record<string, unknown> = {}
-  for (const key of ['file_path', 'path', 'notebook_path', 'pattern', 'query']) {
+  for (const key of ['file_path', 'path', 'notebook_path', 'pattern', 'query', 'description']) {
     const value = text(input[key], key.includes('path') ? 4_096 : 512)
     if (value) result[key] = value
   }
-  if (typeof input.command === 'string') result.commandFingerprint = fingerprint(input.command)
+  if (typeof input.command === 'string') {
+    result.commandFingerprint = fingerprint(input.command)
+    result.commandPreview = input.command.slice(0, 512)
+    result.activity = /(?:^|[\s/])(?:test|tests|test:[\w-]+|vitest|jest|pytest|mocha)(?:[\s;]|$)/i.test(input.command) ? 'Running tests' : 'Executing command'
+  }
   else if (typeof input.command_fingerprint === 'string') result.commandFingerprint = input.command_fingerprint.slice(0, 128)
+  if (typeof input.command_preview === 'string') result.commandPreview = input.command_preview.slice(0, 512)
+  if (input.activity === 'Running tests' || input.activity === 'Executing command') result.activity = input.activity
   if (Array.isArray(input.questions)) {
     result.questions = input.questions.slice(0, 8).flatMap(raw => {
       const question = object(raw)

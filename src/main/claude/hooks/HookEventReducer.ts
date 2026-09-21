@@ -21,7 +21,11 @@ export class HookEventReducer {
 
   restore(checkpoint?: ReducerCheckpoint): void {
     this.sessions.clear()
-    for (const record of checkpoint?.sessions || []) this.sessions.set(record.state.sessionId, clone(record))
+    for (const saved of checkpoint?.sessions || []) {
+      const record = clone(saved)
+      this.projectInteractions(record)
+      this.sessions.set(record.state.sessionId, record)
+    }
   }
 
   checkpoint(): ReducerCheckpoint { return { sessions: [...this.sessions.values()].map(clone) } }
@@ -38,6 +42,7 @@ export class HookEventReducer {
     if (event.source === 'hook') state.coverage = state.coverage === 'recovery-only' ? 'partial' : 'hooks-seen'
     if (event.evidence.completeness === 'partial') state.coverage = 'partial'
     const agentId = event.agentId || 'main'
+    if (agentId === 'main') state.sessionTitle = value(event.data, 'sessionTitle') || state.sessionTitle
 
     switch (event.kind) {
       case 'SessionStart':
@@ -54,8 +59,9 @@ export class HookEventReducer {
       case 'UserPromptSubmit': {
         const prompt = value(event.data, 'prompt')
         state.status = 'busy'; state.activityPhase = 'processing'; state.failure = undefined
-        state.responseFinishedAt = undefined
-        if (prompt) { state.lastPrompt = prompt; state.promptContext = prompt }
+        state.responseFinishedAt = undefined; state.lastAssistantMessage = undefined; state.inputPreview = undefined
+        state.currentTool = undefined; state.currentToolUseId = undefined; state.currentFile = undefined; state.toolLifecycle = undefined; state.currentToolActivity = undefined; state.currentCommand = undefined; state.currentToolDescription = undefined; state.currentSearch = undefined
+        if (prompt) { state.initialTask ||= prompt; state.lastPrompt = prompt; state.promptContext = prompt }
         this.resolveForegroundInteractions(record, agentId)
         this.activity(state, prompt ? `prompt · ${prompt}` : 'prompt submitted', event)
         break
@@ -89,10 +95,13 @@ export class HookEventReducer {
         break
       case 'Stop':
         state.status = 'idle'; state.activityPhase = 'response-finished'; state.responseFinishedAt = event.collectorObservedAt
-        state.lastAssistantMessage = value(event.data, 'lastAssistantMessage') || state.lastAssistantMessage
+        state.lastAssistantMessage = value(event.data, 'lastAssistantMessage')
+        state.inputPreview = undefined; state.toolLifecycle = 'finished'
+        this.resolveForegroundInteractions(record, agentId)
         this.activity(state, 'response finished', event)
         break
       case 'StopFailure':
+        state.responseFinishedAt = undefined
         state.status = 'idle'; state.activityPhase = 'failed'; state.failure = value(event.data, 'error') || 'Claude response failed'
         this.activity(state, 'response failed', event)
         break
@@ -159,7 +168,13 @@ export class HookEventReducer {
     }
     const state = record.state
     state.status = 'busy'; state.activityPhase = toolPhase(name)
-    if (agentId === 'main') { state.currentTool = name; state.toolLifecycle = 'active' }
+    if (agentId === 'main') {
+      state.responseFinishedAt = undefined; state.currentTool = name; state.currentToolUseId = id; state.toolLifecycle = 'active'
+      state.currentFile = undefined; state.fileOperation = undefined; state.inputPreview = undefined
+      state.currentToolActivity = value(input, 'activity')
+      state.currentCommand = value(input, 'commandPreview'); state.currentToolDescription = value(input, 'description')
+      state.currentSearch = value(input, 'pattern') || value(input, 'query')
+    }
     const file = toolFile(input)
     if (file && agentId === 'main') { state.currentFile = isAbsolute(file) ? file : join(state.cwd, file); state.fileOperation = toolOperation(name); this.recordFile(state, state.currentFile) }
     if (name === 'AskUserQuestion') {
@@ -176,9 +191,20 @@ export class HookEventReducer {
     const tool = record.tools[key]
     if (record.terminalToolIds.includes(key)) return
     record.terminalToolIds = [...record.terminalToolIds, key].slice(-512)
-    if (tool) { tool.terminal = terminal; tool.terminalAt = event.collectorObservedAt; record.state.currentTool = tool.name }
+    if (tool) { tool.terminal = terminal; tool.terminalAt = event.collectorObservedAt }
     for (const interaction of Object.values(record.interactions)) if (interaction.agentId === agentId && interaction.toolUseId === id) interaction.evidence = 'resolved'
-    record.state.status = 'busy'; record.state.activityPhase = terminal === 'failure' ? 'failed' : 'tool-finished'; record.state.toolLifecycle = 'finished'; record.state.lastToolFinishedAt = event.collectorObservedAt
+    // PermissionRequest can arrive without a preceding PreToolUse or tool ID.
+    // Resolve only an unambiguous question with the same observed tool input.
+    const input = event.data.toolInput as Record<string, unknown> | undefined
+    if (value(event.data, 'toolName') === 'AskUserQuestion' && input) {
+      const fp = `AskUserQuestion:${fingerprint(input)}`
+      const unmatched = Object.values(record.interactions).filter(item => item.agentId === agentId && item.kind === 'question' && !item.toolUseId && item.evidence !== 'resolved' && item.fingerprint === fp)
+      if (unmatched.length === 1) unmatched[0].evidence = 'resolved'
+    }
+    if (agentId === 'main' && (!record.state.currentToolUseId || record.state.currentToolUseId === id) && record.state.responseFinishedAt === undefined) {
+      record.state.status = 'busy'; record.state.activityPhase = terminal === 'failure' ? 'failed' : 'tool-finished'
+      record.state.toolLifecycle = 'finished'; record.state.lastToolFinishedAt = event.collectorObservedAt; record.state.inputPreview = undefined
+    }
     this.activity(record.state, `${terminal === 'success' ? 'finished' : terminal} · ${(tool?.name || value(event.data, 'toolName') || 'tool').toLowerCase()}`, event)
   }
 
@@ -194,17 +220,27 @@ export class HookEventReducer {
     const input = (event.data.toolInput || {}) as Record<string, unknown>
     const fp = `${toolName}:${fingerprint(input)}`
     const candidates = Object.values(record.tools).filter(tool => tool.agentId === agentId && !tool.terminal && `${tool.name}:${tool.inputFingerprint}` === fp)
-    const toolUseId = candidates.length === 1 ? candidates[0].id : undefined
+    const toolUseId = event.toolUseId || (candidates.length === 1 ? candidates[0].id : undefined)
+    if (toolName === 'AskUserQuestion') {
+      const question = parseQuestions(input) || (candidates.length === 1 ? parseQuestions(candidates[0].input) : undefined)
+      const key = `question:${agentId}:${toolUseId || event.eventId}`
+      const previous = record.interactions[key]
+      record.interactions[key] = { key, kind: 'question', evidence: previous?.evidence === 'confirmed-waiting' ? 'confirmed-waiting' : 'requested', agentId, toolUseId, fingerprint: fp, requestedAt: event.collectorObservedAt, data: question ? { question } : previous?.data || {} }
+      this.activity(record.state, 'question requested', event)
+      return
+    }
     const key = `permission:${agentId}:${toolUseId || event.eventId}`
-    record.interactions[key] = { key, kind: 'permission', evidence: 'requested', agentId, toolUseId, fingerprint: fp, requestedAt: event.collectorObservedAt, data: { toolName } }
+    record.interactions[key] = { key, kind: 'permission', evidence: 'requested', agentId, toolUseId, fingerprint: fp, requestedAt: event.collectorObservedAt, data: { toolName, file: toolFile(input), command: value(input, 'commandPreview'), description: value(input, 'description') } }
     record.state.activityPhase = 'response-end-pending'
     this.activity(record.state, `permission decision requested · ${toolName.toLowerCase()}`, event)
   }
 
   private notification(record: SessionRecord, event: NormalizedHookEvent, agentId: string): void {
     const kind = value(event.data, 'notificationType')
+    if (kind === 'permission_prompt' || kind === 'elicitation_dialog' || kind === 'idle_prompt') record.state.inputPreview = value(event.data, 'message')
+    if (kind === 'idle_prompt' && record.state.responseFinishedAt === undefined) { record.state.status = 'waiting'; record.state.waitingFor = 'unknown'; record.state.interactionEvidence = 'confirmed-waiting' }
     if (kind === 'permission_prompt') {
-      const pending = Object.values(record.interactions).filter(item => item.agentId === agentId && item.kind === 'permission' && item.evidence === 'requested')
+      const pending = Object.values(record.interactions).filter(item => item.agentId === agentId && (item.kind === 'permission' || item.kind === 'question') && item.evidence !== 'resolved')
       if (pending.length === 1) pending[0].evidence = 'confirmed-waiting'
       else {
         const key = `permission:${agentId}:notification:${event.eventId}`
@@ -219,6 +255,7 @@ export class HookEventReducer {
 
   private elicitation(record: SessionRecord, event: NormalizedHookEvent, agentId: string): void {
     const key = `elicitation:${agentId}:${event.elicitationId || event.eventId}`
+    record.state.inputPreview = value(event.data, 'message')
     record.interactions[key] = { key, kind: 'elicitation', evidence: 'requested', agentId, requestedAt: event.collectorObservedAt, data: event.data }
     this.activity(record.state, 'elicitation requested', event)
   }
@@ -230,12 +267,14 @@ export class HookEventReducer {
       const candidates = Object.values(record.interactions).filter(item => item.agentId === agentId && item.kind === 'elicitation' && item.evidence !== 'resolved')
       if (candidates.length === 1) candidates[0].evidence = 'resolved'
     }
+    record.state.inputPreview = undefined
     this.activity(record.state, 'elicitation resolved', event)
   }
 
   private applyRecoveredState(record: SessionRecord, event: NormalizedHookEvent): void {
     const state = record.state
     const status = value(event.data, 'status')
+    const previousStatus = state.status
     if (status === 'busy' || status === 'idle' || status === 'waiting') state.status = status
     const pid = event.data.pid; if (typeof pid === 'number' && pid > 0) state.pid = pid
     state.cwd = value(event.data, 'cwd') || state.cwd; state.name = value(event.data, 'name') || state.name
@@ -246,13 +285,32 @@ export class HookEventReducer {
       const pending = Object.values(record.interactions).filter(item => item.evidence === 'requested')
       if (pending.length === 1) pending[0].evidence = 'confirmed-waiting'
       else { state.interactionKind = 'unknown'; state.interactionEvidence = 'confirmed-waiting'; state.waitingFor = 'unknown' }
-    } else if (status === 'busy') {
+    } else if (status === 'busy' && previousStatus !== 'busy') {
+      state.responseFinishedAt = undefined; state.lastAssistantMessage = undefined; state.inputPreview = undefined
+      state.currentTool = undefined; state.currentToolUseId = undefined; state.currentFile = undefined; state.toolLifecycle = undefined; state.currentToolActivity = undefined; state.currentCommand = undefined; state.currentToolDescription = undefined; state.currentSearch = undefined
       for (const interaction of Object.values(record.interactions)) if (interaction.evidence === 'confirmed-waiting') interaction.evidence = 'resolved'
+      state.waitingFor = undefined; state.interactionKind = undefined; state.interactionEvidence = undefined
       state.activityPhase = 'processing'
     } else if (status === 'idle' && state.activityPhase !== 'response-finished') state.activityPhase = 'idle'
   }
 
   private projectInteractions(record: SessionRecord): void {
+    // Older checkpoints projected AskUserQuestion's PermissionRequest as a
+    // permission and hid the question captured by PreToolUse. Repair those
+    // records too, so restarting fixes an already-open question.
+    for (const item of Object.values(record.interactions)) {
+      if (item.kind !== 'permission' || value(item.data, 'toolName') !== 'AskUserQuestion') continue
+      const tool = item.toolUseId ? record.tools[`${item.agentId}:${item.toolUseId}`] : undefined
+      const questionInteraction = Object.values(record.interactions).find(candidate => candidate.kind === 'question' && candidate.agentId === item.agentId && candidate.toolUseId === item.toolUseId)
+      const question = (tool && parseQuestions(tool.input)) || questionInteraction?.data.question
+      if (questionInteraction && questionInteraction !== item) {
+        if (item.evidence === 'confirmed-waiting') questionInteraction.evidence = 'confirmed-waiting'
+        item.evidence = 'resolved'
+      } else {
+        item.kind = 'question'
+        item.data = question ? { question } : {}
+      }
+    }
     const unresolved = Object.values(record.interactions).filter(item => item.evidence !== 'resolved')
     const confirmed = unresolved.filter(item => item.evidence === 'confirmed-waiting')
     const focus = confirmed.at(-1) || unresolved.at(-1)
@@ -269,8 +327,9 @@ export class HookEventReducer {
     state.waitingFor = focus.kind
     if (focus.evidence === 'confirmed-waiting') { state.status = 'waiting'; state.activityPhase = focus.kind === 'permission' ? 'permission' : 'waiting' }
     state.permission = focus.kind === 'permission' ? {
-      command: value(focus.data, 'toolName') || 'tool action',
-      question: focus.evidence === 'confirmed-waiting' ? 'Claude Code is waiting for permission to continue with {command}.' : 'Claude Code requested a permission decision for {command}.',
+      command: value(focus.data, 'command') || value(focus.data, 'file') || value(focus.data, 'toolName') || 'tool action',
+      detail: value(focus.data, 'description'),
+      question: value(focus.data, 'description') || permissionPreview(focus.data),
       evidence: focus.evidence
     } : undefined
     state.question = focus.kind === 'question' ? focus.data.question as ObservedQuestionRequest | undefined : undefined
@@ -278,6 +337,7 @@ export class HookEventReducer {
 
   private resolveForegroundInteractions(record: SessionRecord, agentId: string): void {
     for (const interaction of Object.values(record.interactions)) if (interaction.agentId === agentId) interaction.evidence = 'resolved'
+    if (agentId === 'main') { record.state.waitingFor = undefined; record.state.interactionKind = undefined; record.state.interactionEvidence = undefined }
   }
   private resolveAllInteractions(record: SessionRecord, evidence: 'resolved' | 'unknown'): void { for (const item of Object.values(record.interactions)) item.evidence = evidence }
   private countTool(state: ClaudeSessionState, name: string, at: number): void {
@@ -299,3 +359,12 @@ function toolOperation(name: string): 'EDITING' | 'READING' | undefined { return
 function toolPhase(name: string): ClaudeSessionState['activityPhase'] { return toolOperation(name) === 'EDITING' ? 'editing' : toolOperation(name) === 'READING' ? 'reading' : 'tool' }
 function parseQuestions(input: Record<string, unknown>): ObservedQuestionRequest | undefined { const questions = input.questions; return Array.isArray(questions) && questions.length ? { questions: questions as ObservedQuestionRequest['questions'] } : undefined }
 function humanize(value: string): string { return value.replace(/([a-z])([A-Z])/g, '$1 $2').toLowerCase() }
+
+function permissionPreview(data: Record<string, unknown>): string {
+  const tool = value(data, 'toolName') || ''
+  const file = value(data, 'file')
+  if (/^(Edit|Write|NotebookEdit)$/.test(tool)) return file ? `Approve editing ${basename(file)}?` : 'Approve file changes?'
+  if (tool === 'Read') return file ? `Allow reading ${basename(file)}?` : 'Allow file access?'
+  if (tool === 'Bash') return 'Approve command?'
+  return tool && tool !== 'tool action' ? `Allow ${tool}?` : 'Waiting for permission'
+}

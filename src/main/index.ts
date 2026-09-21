@@ -6,13 +6,12 @@ import { WorkerManager } from './claude/WorkerManager'
 import { PersistenceStore } from './runtime/PersistenceStore'
 import { crew } from '../renderer/src/crew'
 
-type Mode = 'collapsed' | 'orbit' | 'preview' | 'detail' | 'empty'
+type Mode = 'collapsed' | 'orbit' | 'preview' | 'empty'
 // The collapsed pod keeps one fixed footprint across worker transitions so
 // transcript updates never move the desktop window under the pointer.
 const pod = { width: 128, height: 128 }
 const orbit = { width: 330, height: 388 }
-const preview = { width: 566, height: 388 }
-const detail = { width: 408, height: 704 }
+const preview = { width: 630, height: 388 }
 const empty = { width: 330, height: 388 }
 
 let window: BrowserWindow | undefined
@@ -77,7 +76,7 @@ function startPointerMonitor(): void {
 }
 function setMode(nextMode: Mode): void {
   if (!window || mode === nextMode) return
-  const nextSize = ({ collapsed: pod, orbit, preview, detail, empty } as const)[nextMode]
+  const nextSize = ({ collapsed: pod, orbit, preview, empty } as const)[nextMode]
   const area = currentWorkArea()
   const current = window.getBounds()
   const anchor = collapsedAnchor || {
@@ -125,7 +124,6 @@ function createWindow(): void {
     if (process.env.ORBIT_FIXTURE === 'empty') setMode('empty')
     else if (process.env.ORBIT_START_MODE === 'expanded' || process.env.ORBIT_START_MODE === 'orbit') setMode('orbit')
     else if (process.env.ORBIT_START_MODE === 'preview') setMode('preview')
-    else if (process.env.ORBIT_START_MODE === 'detail') setMode('detail')
     if (process.env.ORBIT_CAPTURE) setTimeout(async () => {
       const image = await window?.webContents.capturePage()
       if (image) await writeFile(process.env.ORBIT_CAPTURE!, image.toPNG())
@@ -138,7 +136,7 @@ app.whenReady().then(async () => {
   persistence = new PersistenceStore(join(app.getPath('userData'), 'orbit-state.json'))
   await persistence.load()
   createWindow()
-  const modeSchema = z.enum(['collapsed', 'orbit', 'preview', 'detail', 'empty'])
+  const modeSchema = z.enum(['collapsed', 'orbit', 'preview', 'empty'])
   const pointSchema = z.object({ x: z.number(), y: z.number() })
   ipcMain.handle('orbit:set-mode', (_event, value: unknown) => setMode(modeSchema.parse(value)))
   ipcMain.handle('orbit:get-workers', () => mockAttentionWorkers() || workerManager?.getWorkerSnapshot() || [])

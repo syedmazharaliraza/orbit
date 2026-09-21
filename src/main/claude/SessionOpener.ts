@@ -3,7 +3,7 @@ import { basename } from 'node:path'
 
 export type OpenSessionResult = {
   ok: boolean
-  mode?: 'application'
+  mode?: 'application' | 'terminal'
   message: string
 }
 
@@ -44,6 +44,23 @@ export class SessionOpener {
     const chain = processChain(sessionProcess, processes)
     const host = applicationHost(chain)
     if (!host) return { ok: false, message: 'Orbit could not identify the app hosting this session.' }
+
+    // Terminal and iTerm expose the PTY of each tab/pane. Select by device,
+    // never by a title that can be shared by several workers.
+    const script = host.label === 'Terminal' ? terminalFocusScript : /^iTerm2?$/.test(host.label) ? itermFocusScript : undefined
+    if (script) {
+      try {
+        const { stdout } = await this.run('/bin/ps', ['-p', String(pid), '-o', 'tty='], { timeout: 1_500, maxBuffer: 16 * 1024 })
+        const tty = stdout.trim().replace(/^\/dev\//, '')
+        if (/^ttys?\d+$/.test(tty)) {
+          const focused = await this.run('/usr/bin/osascript', ['-e', script, `/dev/${tty}`], { timeout: 5_000, maxBuffer: 16 * 1024 })
+          if (focused.stdout.trim() === 'focused') return { ok: true, mode: 'terminal', message: 'Focused Claude Code session.' }
+          return { ok: false, message: `Could not find this session’s tab in ${host.label}.` }
+        }
+      } catch {
+        return { ok: false, message: `Allow Orbit to control ${host.label} in macOS Automation settings to focus this session.` }
+      }
+    }
 
     try {
       await this.run('/usr/bin/open', [host.applicationPath], { timeout: 2_000, maxBuffer: 16 * 1024 })
@@ -88,3 +105,41 @@ function applicationHost(chain: ProcessEntry[]): ApplicationHost | undefined {
   if (!applicationPath) return undefined
   return { applicationPath, label: basename(applicationPath, '.app') || 'host application' }
 }
+
+// Arguments carry the device path as data; no session content becomes AppleScript.
+export const terminalFocusScript = `on run argv
+  tell application id "com.apple.Terminal"
+    repeat with hostWindow in windows
+      repeat with hostTab in tabs of hostWindow
+        if tty of hostTab is item 1 of argv then
+          set selected of hostTab to true
+          set miniaturized of hostWindow to false
+          set index of hostWindow to 1
+          activate
+          return "focused"
+        end if
+      end repeat
+    end repeat
+  end tell
+  return "missing"
+end run`
+
+export const itermFocusScript = `on run argv
+  tell application id "com.googlecode.iterm2"
+    repeat with hostWindow in windows
+      repeat with hostTab in tabs of hostWindow
+        repeat with hostSession in sessions of hostTab
+          if tty of hostSession is item 1 of argv then
+            set miniaturized of hostWindow to false
+            select hostWindow
+            select hostTab
+            select hostSession
+            activate
+            return "focused"
+          end if
+        end repeat
+      end repeat
+    end repeat
+  end tell
+  return "missing"
+end run`

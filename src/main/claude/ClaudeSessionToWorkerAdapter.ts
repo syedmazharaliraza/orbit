@@ -1,270 +1,103 @@
-/**
- * ClaudeSessionToWorkerAdapter - Maps Claude Code session state to Worker model
- *
- * Responsibilities:
- * - Transform ClaudeSessionState into Worker type
- * - Handle observed/derived/inferred/mocked field semantics
- * - Provide fallback values for unavailable data
- * - Document field sources clearly
- */
-
-import type { Worker, Mark, FileTag } from '../../renderer/src/crew'
-import type { ClaudeSessionState, WorkerFieldMetadata } from './types'
+import { basename, relative } from 'node:path'
+import type { Worker, Mark } from '../../renderer/src/crew'
+import type { ClaudeSessionState } from './types'
 import { classifySessionAttention } from './AttentionClassifier'
 
+/** Projects observation into the small, glanceable surface sent to the renderer. */
 export class ClaudeSessionToWorkerAdapter {
-  /**
-   * Convert ClaudeSessionState to Worker
-   */
   toWorker(session: ClaudeSessionState): Worker {
     const attention = classifySessionAttention(session)
-    return {
-      // === OBSERVED FIELDS (from Claude Code data) ===
-      id: this.sessionIdToShortId(session.sessionId),
-      name: this.deriveWorkerName(session.name),
-      task: session.lastPrompt || session.initialTask || 'No prompt observed',
-      state: attention.state,
-      presentation: attention.presentation,
-      elapsed: this.calculateElapsed(session.startedAt),
-      repo: this.extractRepoName(session.cwd),
-      file: session.currentFile || '',
-      fileTag: (session.fileOperation || 'READING') as FileTag,
-      tool: this.formatToolName(session.currentTool, session.toolLifecycle),
-      activity: session.activity || [],
-      budget: this.calculateBudget(session.tokensRemaining, session.tokensTotal),
-      context: this.formatContext(session),
-      tools: session.tools?.map(tool => ({ name: tool.name, count: tool.count })),
-      relevantFiles: session.relevantFiles,
-      usage: session.usage,
-      promptContext: session.promptContext,
-
-      // === DERIVED FIELDS (computed from observed data) ===
-      action: this.deriveAction(session, attention.state),
-      path: this.extractPath(session.currentFile),
-
-      // === INFERRED FIELDS (reasonable defaults from available data) ===
-      priority: attention.priority,
-      hue: this.assignHue(session.sessionId),
-      mark: this.assignMark(session.sessionId),
-      branch: session.gitBranch || '',
-      model: this.formatModel(session.model),
-      effort: this.formatEffort(session.effort),
-      delay: this.animationDelay(session.sessionId),
-
-      // === MOCKED/UNAVAILABLE FIELDS (not observable in Stage 6) ===
-      edit: '', // Would need diff analysis
-      cost: '', // Would need API call tracking
-      message: session.lastAssistantMessage || '',
-      progress: undefined, // Not available from observation
-      filesGiven: undefined, // Not available from observation
-      foundFiles: undefined, // Not available from observation
-      permission: session.permission,
-      question: session.question,
-      waitingFor: session.waitingFor,
-      signal: attention.signal,
-      canOpenSession: session.pid > 0 && session.lifecycle !== 'ended'
-    }
-  }
-
-  // ========================================================================
-  // OBSERVED FIELD MAPPERS
-  // ========================================================================
-
-  private sessionIdToShortId(sessionId: string): string {
-    // Keep the complete observed ID: short UUID prefixes can collide when
-    // several live Claude sessions are shown together.
-    return sessionId
-  }
-
-  private deriveWorkerName(sessionName: string): string {
-    // Session names like "orbit-50" -> "Orbit"
-    // Keep first word, capitalize
-    const base = sessionName.split('-')[0] || sessionName
-    return base.charAt(0).toUpperCase() + base.slice(1).toLowerCase()
-  }
-
-  private calculateElapsed(startedAt: number): string {
-    const now = Date.now()
-    const elapsed = now - startedAt
-
-    const minutes = Math.floor(elapsed / 60000)
-    const hours = Math.floor(minutes / 60)
-    const mins = minutes % 60
-
-    if (hours > 0) {
-      return `${hours}h${mins.toString().padStart(2, '0')}`
-    } else {
-      return `${mins}m`
-    }
-  }
-
-  private extractRepoName(cwd: string): string {
-    const parts = cwd.split('/')
-    return parts[parts.length - 1] || 'unknown'
-  }
-
-  private formatToolName(tool: string | undefined, lifecycle?: 'active' | 'finished'): string {
-    if (!tool) return ''
-
-    // Format tool names nicely: "Edit" -> "edit", "Bash" -> "bash"
-    const formatted = tool.toLowerCase()
-
-    // Add context for common tools
-    const prefix = lifecycle === 'finished' ? 'finished · ' : ''
-    if (formatted === 'bash') return `${prefix}bash`
-    if (formatted === 'edit') return `${prefix}edit`
-    if (formatted === 'read') return `${prefix}read`
-    if (formatted === 'write') return `${prefix}write`
-
-    return `${prefix}${formatted}`
-  }
-
-  private calculateBudget(remaining: number | undefined, total: number | undefined): number | undefined {
-    if (remaining === undefined || total === undefined || total <= 0) return undefined
-    return Math.round((remaining / total) * 100)
-  }
-
-  private formatContext(session: ClaudeSessionState): string {
-    const { tokensRemaining: remaining, tokensTotal: total, usage } = session
-    if (remaining !== undefined && total !== undefined) return `${this.formatTokens(remaining)} / ${this.formatTokens(total)} ctx`
-    if (remaining !== undefined) return `${this.formatTokens(remaining)} ctx left`
-    if (usage) return `${this.formatTokens(usage.totalTokens)} used · ${usage.turnCount} turn${usage.turnCount === 1 ? '' : 's'}`
-    return 'context pending'
-  }
-
-  private formatTokens(tokens: number): string {
-    if (tokens >= 1_000_000) return `${(tokens / 1_000_000).toFixed(1)}M`
-    if (tokens >= 1_000) return `${Math.round(tokens / 1_000)}k`
-    return `${tokens}`
-  }
-
-  // ========================================================================
-  // DERIVED FIELD MAPPERS
-  // ========================================================================
-
-  private deriveAction(session: ClaudeSessionState, workerState: Worker['state']): string {
-    const { currentTool: tool, currentFile: file, activityPhase } = session
-    if (workerState === 'waiting' && !session.permission) return session.question ? 'question · waiting for your choice' : 'waiting for you'
-    if (activityPhase === 'starting') return 'starting…'
-    if (activityPhase === 'processing') return 'processing…'
-    if (activityPhase === 'assistant') return 'assistant response'
-    if (activityPhase === 'waiting') return 'waiting for you'
-    if (activityPhase === 'permission') return `approval · ${session.permission?.command || 'requested'}`
-    if (workerState === 'done') return 'finished · recent tool'
-    if (activityPhase === 'idle') return 'idle'
-    if (!tool) return ''
-
-    const toolLower = tool.toLowerCase()
-    const fileName = file ? file.split('/').pop() : ''
-
-    if (activityPhase === 'tool-finished') {
-      return `finished · ${toolLower}${fileName ? ` ${fileName}` : ''}`
-    }
-
-    if (fileName) {
-      return `${toolLower} · ${fileName}`
-    } else if (toolLower === 'bash') {
-      return 'bash'
-    } else {
-      return toolLower
-    }
-  }
-
-  private extractPath(file: string | undefined): string {
-    if (!file) return ''
-
-    const parts = file.split('/')
-    parts.pop() // Remove filename
-    const path = parts.join('/')
-
-    // Return relative path from project root
-    return path.replace(/^.*\/src/, 'src') || ''
-  }
-
-  // ========================================================================
-  // INFERRED FIELD MAPPERS
-  // ========================================================================
-
-  private assignHue(sessionId: string): number {
-    // Deterministic hue from session ID for consistent colors
     let hash = 0
-    for (let i = 0; i < sessionId.length; i++) {
-      hash = ((hash << 5) - hash) + sessionId.charCodeAt(i)
-      hash = hash & hash // Convert to 32bit integer
-    }
-    return Math.abs(hash) % 360
-  }
-
-  private assignMark(sessionId: string): Mark {
+    for (const char of session.sessionId) hash = ((hash << 5) - hash + char.charCodeAt(0)) | 0
     const marks: Mark[] = ['bar', 'dot', 'two', 'ring', 'diamond', 'square']
-    // Use first character of session ID
-    const charCode = sessionId.charCodeAt(0)
-    return marks[charCode % marks.length]
+    return {
+      id: session.sessionId,
+      name: session.name.split('-')[0] || 'Claude',
+      title: workerTitle(session),
+      action: workerActivity(session),
+      context: workerContext(session),
+      ...attention,
+      hue: Math.abs(hash) % 360,
+      mark: marks[(session.sessionId.charCodeAt(0) || 0) % marks.length],
+      delay: `${-(Math.abs(hash) % 7 * .3 + .2).toFixed(1)}s`,
+      permission: Boolean(session.permission),
+      question: Boolean(session.question) || session.interactionKind === 'question',
+      waitingFor: session.waitingFor
+    }
   }
+}
 
-  private formatModel(model: string | undefined): string {
-    if (!model) return 'model unavailable'
-    const match = model.match(/(?:claude-)?(opus|sonnet|haiku)(?:-(\d+)-(\d+))?/i)
-    if (!match) return model
-    const family = match[1].charAt(0).toUpperCase() + match[1].slice(1).toLowerCase()
-    return match[2] && match[3] ? `${family} ${match[2]}.${match[3]}` : family
+/** Normalize a small preview; CSS handles the final single-line ellipsis. */
+export function previewLine(text: string): string {
+  return text.replace(/\[([^\]]+)\]\([^)]+\)/g, '$1')
+    .replace(/(\*\*|__)(.*?)\1/g, '$2').replace(/^[\s#>*-]+/, '').replace(/`/g, '').replace(/\s+/g, ' ').trim()
+}
+
+/** Pasted text is useful task context; its transport wrapper is not a title. */
+function titleContent(text?: string): string {
+  return (text || '')
+    .replace(/&lt;(\/?pasted_content\b[^]*?)&gt;/gi, '<$1>')
+    .replace(/<\/?pasted_content\b[^>]*>/gi, '\n')
+    // The collector bounds prompts, so a long marker can arrive incomplete.
+    .replace(/<\/?pasted_content\b[^>]*$/gi, '')
+    .trim()
+}
+
+export function workerTitle(session: ClaudeSessionState): string {
+  const sessionTitle = titleContent(session.sessionTitle)
+  if (sessionTitle) return previewLine(sessionTitle)
+  const prompt = titleContent(session.initialTask) || titleContent(session.lastPrompt)
+  if (!prompt) return 'Claude Code session'
+  const sentence = previewLine(prompt.split('\n').find(line => line.trim()) || prompt)
+    .replace(/^(?:(?:please|can you|could you|would you|help me(?: to)?|I (?:want|need)(?: you)? to)\s+)+/i, '')
+    .split(/(?<=[!?])\s|\.\s/)[0]
+  const words = sentence.split(/\s+/)
+  const short = words.slice(0, 7).join(' ').replace(/[.,:;]+$/, '')
+  return short ? short.charAt(0).toUpperCase() + short.slice(1) + (words.length > 7 ? '…' : '') : 'Claude Code session'
+}
+
+export function workerActivity(session: ClaudeSessionState): string {
+  const question = session.question?.questions[0]?.question
+  if (question && (session.question || session.waitingFor || session.status === 'waiting')) return previewLine(question)
+  if (session.interactionKind === 'question') return previewLine(session.inputPreview || '') || 'Waiting for input'
+  if (session.permission) return previewLine(session.permission.detail || session.inputPreview || session.permission.question.replace('{command}', session.permission.command))
+  if (session.inputPreview && (session.waitingFor || session.status === 'waiting')) return previewLine(session.inputPreview)
+  if (session.status === 'waiting' || session.activityPhase === 'waiting') return 'Waiting for input'
+  if (session.responseFinishedAt !== undefined) return previewLine(session.lastAssistantMessage || '') || 'Completed'
+  if (session.activityPhase === 'failed') return 'Needs attention'
+  if (session.activityPhase === 'idle' || session.status === 'idle') return 'Waiting for input'
+  if (session.toolLifecycle !== 'active') return 'Thinking'
+  const tool = session.currentTool || ''
+  const file = session.currentFile ? basename(session.currentFile) : ''
+  if (/^(Edit|Write|NotebookEdit)$/i.test(tool)) return file ? `Editing ${file}` : 'Editing file'
+  if (/^Read$/i.test(tool)) return file ? `Reading ${file}` : 'Reading file'
+  if (/^(Grep|Glob|Search)$/i.test(tool)) return 'Searching repository'
+  if (/^(Bash|Shell)$/i.test(tool)) return previewLine(session.currentToolDescription || '') || session.currentToolActivity || 'Executing command'
+  if (tool === 'AskUserQuestion') return 'Waiting for input'
+  return tool ? 'Executing command' : 'Thinking'
+}
+
+/** One contextual detail, never a list of past activity or files. */
+export function workerContext(session: ClaudeSessionState): Worker['context'] {
+  const question = session.question?.questions[0]
+  if (question) {
+    const choices = question.options.slice(0, 4).map(option => previewLine(option.label))
+    return choices.length ? { label: 'Choices', choices, remaining: Math.max(0, question.options.length - choices.length) } : undefined
   }
-
-  private formatEffort(effort: string | undefined): string {
-    return effort ? effort.toLowerCase() : 'effort unavailable'
+  if (session.permission) {
+    const command = session.permission.command
+    return command && command !== 'tool action' ? { label: 'Requested action', text: command, code: true } : undefined
   }
-
-  private animationDelay(sessionId: string): string {
-    // A deterministic delay avoids restarting an astronaut's animation on
-    // every observed state update.
-    const delays = ['-0.2s', '-0.5s', '-0.8s', '-1.1s', '-1.4s', '-1.7s', '-2.0s']
-    let hash = 0
-    for (let index = 0; index < sessionId.length; index++) hash = ((hash << 5) - hash) + sessionId.charCodeAt(index)
-    return delays[Math.abs(hash) % delays.length]
+  if (session.status === 'waiting' || session.waitingFor || session.responseFinishedAt !== undefined || session.status === 'idle') return undefined
+  const finished = session.toolLifecycle === 'finished'
+  if (/^(Bash|Shell)$/i.test(session.currentTool || '') && session.currentCommand) {
+    return { label: finished ? 'Just ran' : 'Command', text: session.currentCommand, code: true }
   }
-
-  // ========================================================================
-  // FIELD METADATA (for documentation)
-  // ========================================================================
-
-  static getFieldMetadata(): WorkerFieldMetadata[] {
-    return [
-      { field: 'id', source: 'observed', description: 'From sessionId (truncated)' },
-      { field: 'name', source: 'observed', description: 'From session.name' },
-      { field: 'task', source: 'observed', description: 'From latest prompt or history entry' },
-      { field: 'state', source: 'derived', description: 'Observed phase/status plus explicit Stage 8 attention rules' },
-      { field: 'presentation', source: 'derived', description: 'User-facing label derived from observed phase/status' },
-      { field: 'elapsed', source: 'observed', description: 'Calculated from startedAt' },
-      { field: 'repo', source: 'observed', description: 'Extracted from cwd' },
-      { field: 'file', source: 'observed', description: 'From currentFile (transcript)' },
-      { field: 'fileTag', source: 'observed', description: 'From fileOperation (transcript)' },
-      { field: 'tool', source: 'observed', description: 'From currentTool (transcript)' },
-      { field: 'activity', source: 'observed', description: 'From transcript events' },
-      { field: 'budget', source: 'observed', description: 'Only calculated when both token bounds are observed' },
-      { field: 'context', source: 'observed', description: 'From observed remaining-context or assistant usage data' },
-      { field: 'tools', source: 'observed', description: 'Compact counts of observed tool calls' },
-      { field: 'relevantFiles', source: 'observed', description: 'Recent file paths from observed tool inputs' },
-      { field: 'usage', source: 'observed', description: 'Aggregated assistant usage records' },
-
-      { field: 'action', source: 'derived', description: 'From tool + file' },
-      { field: 'path', source: 'derived', description: 'From file path' },
-
-      { field: 'priority', source: 'derived', description: 'Attention priority from observed phase and explicit heuristic signals' },
-      { field: 'hue', source: 'inferred', description: 'Hash of sessionId' },
-      { field: 'mark', source: 'inferred', description: 'Hash of sessionId' },
-      { field: 'branch', source: 'observed', description: 'From transcript metadata or git working tree' },
-      { field: 'model', source: 'observed', description: 'From assistant model metadata' },
-      { field: 'effort', source: 'observed', description: 'From assistant metadata or the active Claude settings value' },
-      { field: 'delay', source: 'inferred', description: 'Random for animation' },
-
-      { field: 'edit', source: 'unavailable', description: 'Would need diff analysis' },
-      { field: 'cost', source: 'unavailable', description: 'Would need API tracking' },
-      { field: 'message', source: 'observed', description: 'Latest meaningful assistant text block' },
-      { field: 'progress', source: 'unavailable', description: 'Not observable' },
-      { field: 'filesGiven', source: 'unavailable', description: 'Not observable' },
-      { field: 'foundFiles', source: 'unavailable', description: 'Not observable' },
-      { field: 'permission', source: 'observed', description: 'Permission-related tool-result evidence from the transcript' },
-      { field: 'signal', source: 'derived', description: 'Explicitly heuristic repeated-tool, outside-project, or busy-without-activity rule' }
-    ]
+  if (/^(Read|Edit|Write|NotebookEdit)$/i.test(session.currentTool || '') && session.currentFile) {
+    const file = relative(session.cwd, session.currentFile) || basename(session.currentFile)
+    const verb = session.fileOperation === 'EDITING' ? 'Just edited' : 'Just read'
+    return { label: finished ? verb : 'File', text: file, code: true }
   }
+  if (session.currentSearch) return { label: finished ? 'Just searched' : 'Searching for', text: session.currentSearch, code: true }
+  return undefined
 }

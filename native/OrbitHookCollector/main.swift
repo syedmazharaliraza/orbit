@@ -27,10 +27,14 @@ func toolInput(_ raw: Any?) -> [String: Any] {
     for key in ["file_path", "path", "notebook_path"] {
         if let item = bounded(input[key], 4096) { result[key] = item }
     }
-    for key in ["pattern", "query"] {
+    for key in ["pattern", "query", "description"] {
         if let item = bounded(input[key], 512) { result[key] = item }
     }
-    if let command = input["command"] as? String { result["command_fingerprint"] = digest(command) }
+    if let command = input["command"] as? String {
+        result["command_fingerprint"] = digest(command)
+        result["command_preview"] = String(command.prefix(512))
+        result["activity"] = command.range(of: #"(?:^|[\s/])(?:test|tests|test:[\w-]+|vitest|jest|pytest|mocha)(?:[\s;]|$)"#, options: [.regularExpression, .caseInsensitive]) != nil ? "Running tests" : "Executing command"
+    }
     if let questions = input["questions"] as? [[String: Any]] {
         result["questions"] = questions.prefix(8).compactMap { item -> [String: Any]? in
             guard let question = bounded(item["question"], 1024) else { return nil }
@@ -81,8 +85,10 @@ func minimize(event: String, payload: [String: Any]) -> [String: Any] {
             }
         }
     case "Notification":
+        if let message = bounded(payload["message"], 512) { result["message"] = message }
         if let type = bounded(payload["notification_type"], 128) { result["notification_type"] = type }
     case "Elicitation":
+        if let message = bounded(payload["message"], 512) { result["message"] = message }
         if let server = bounded(payload["server_name"], 256) { result["server_name"] = server }
         if let mode = bounded(payload["mode"], 64) { result["mode"] = mode }
         if let request = payload["request"] as? [String: Any] { result["request"] = Dictionary(uniqueKeysWithValues: request.keys.prefix(64).map { ($0, true) }) }

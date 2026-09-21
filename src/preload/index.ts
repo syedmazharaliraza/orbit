@@ -1,6 +1,6 @@
 import { contextBridge, ipcRenderer } from 'electron'
 
-type Mode = 'collapsed' | 'orbit' | 'preview' | 'detail' | 'empty'
+type Mode = 'collapsed' | 'orbit' | 'preview' | 'empty'
 
 contextBridge.exposeInMainWorld('orbit', {
   getWorkers: () => ipcRenderer.invoke('orbit:get-workers'),
