@@ -26,5 +26,10 @@ contextBridge.exposeInMainWorld('orbit', {
     const handler = (_event: Electron.IpcRendererEvent, workers: unknown[]) => listener(workers)
     ipcRenderer.on('orbit:workers-updated', handler)
     return () => ipcRenderer.removeListener('orbit:workers-updated', handler)
+  },
+  onHookHealthChanged: (listener: (health: 'healthy' | 'degraded' | 'unknown') => void) => {
+    const handler = (_event: Electron.IpcRendererEvent, health: 'healthy' | 'degraded' | 'unknown') => listener(health)
+    ipcRenderer.on('orbit:hook-health', handler)
+    return () => ipcRenderer.removeListener('orbit:hook-health', handler)
   }
 })

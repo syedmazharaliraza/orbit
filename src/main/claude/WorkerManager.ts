@@ -7,6 +7,8 @@ import { ClaudeSessionToWorkerAdapter } from './ClaudeSessionToWorkerAdapter'
 import { HookObservationService } from './hooks/HookObservationService'
 import { SessionOpener, type OpenSessionResult } from './SessionOpener'
 
+export type HookHealth = 'healthy' | 'degraded' | 'unknown'
+
 export class WorkerManager extends EventEmitter {
   private readonly useRealSessions = process.env.ORBIT_USE_MOCK_WORKERS !== 'true'
   private observer: HookObservationService | undefined
@@ -16,20 +18,39 @@ export class WorkerManager extends EventEmitter {
   private readonly sessionOpener = new SessionOpener()
   private window: BrowserWindow | undefined
   private publishTimeout: NodeJS.Timeout | undefined
+  private hookHealth: HookHealth = 'unknown'
+  private degradedSince: number | undefined
 
   async initialize(window: BrowserWindow, observationRoot: string): Promise<void> {
     this.window = window
     if (!this.useRealSessions) return this.initializeMockWorkers()
 
     this.observer = new HookObservationService(observationRoot)
-    this.observer.on('session-state-updated', (state: ClaudeSessionState) => this.updateObservedWorker(state))
+    this.observer.on('session-state-updated', (state: ClaudeSessionState) => {
+      this.updateObservedWorker(state)
+      // Receiving hook events means hooks are working
+      if (this.hookHealth !== 'healthy') {
+        this.hookHealth = 'healthy'
+        this.degradedSince = undefined
+        this.publishHealthStatus()
+      }
+    })
     this.observer.on('error', (error: Error) => this.emit('integration-error', error))
-    this.observer.on('coverage-degraded', (error: Error) => this.emit('integration-error', error))
+    this.observer.on('coverage-degraded', (error: Error) => {
+      this.emit('integration-error', error)
+      if (this.hookHealth !== 'degraded') {
+        this.hookHealth = 'degraded'
+        this.degradedSince = Date.now()
+        this.publishHealthStatus()
+      }
+    })
     await this.observer.start()
     this.publish()
+    this.publishHealthStatus()
   }
 
   getWorkerSnapshot(): Worker[] { return Array.from(this.workers.values()) }
+  getHookHealth(): HookHealth { return this.hookHealth }
   isUsingRealSessions(): boolean { return this.useRealSessions }
   async openSession(sessionId: string): Promise<OpenSessionResult> {
     const state = this.states.get(sessionId)
@@ -70,6 +91,10 @@ export class WorkerManager extends EventEmitter {
 
   private publish(): void {
     this.window?.webContents.send('orbit:workers-updated', this.getWorkerSnapshot())
+  }
+
+  private publishHealthStatus(): void {
+    this.window?.webContents.send('orbit:hook-health', this.hookHealth)
   }
 
   private async initializeMockWorkers(): Promise<void> {

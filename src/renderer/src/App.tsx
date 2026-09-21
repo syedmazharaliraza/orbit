@@ -4,10 +4,13 @@ import { ActivityTicker } from './ActivityTicker'
 import { collapsedSummary, crew, orbitSlots, orderedCrew, type Worker } from './crew'
 
 type Mode = 'collapsed' | 'orbit' | 'preview' | 'empty'
+type HookHealth = 'healthy' | 'degraded' | 'unknown'
+
 export function App() {
   const [mode, setMode] = useState<Mode>('collapsed')
   const [closing, setClosing] = useState(false)
   const [navigationMessage, setNavigationMessage] = useState('')
+  const [hookHealth, setHookHealth] = useState<HookHealth>('unknown')
   const opening = useRef(false)
   const [workers, setWorkers] = useState<Worker[]>(crew)
   const [selected, setSelected] = useState<Worker>(crew[0])
@@ -116,6 +119,7 @@ export function App() {
     if (!selectedStillExists) closePreview()
     if (!updated.length && modeRef.current !== 'collapsed' && modeRef.current !== 'empty') request('empty')
   }), [closePreview, request, selected.id])
+  useEffect(() => window.orbit.onHookHealthChanged(health => setHookHealth(health)), [])
   useEffect(() => () => { clearTimer(previewTimer); clearTimer(collapseTimer) }, [])
 
   const openSession = async (worker: Worker) => {
@@ -137,8 +141,8 @@ export function App() {
 
   return <main className={`app app--${mode}`} onPointerMove={onPointerMove}>
     <CrewPod workers={workers} onClick={open} visible={mode === 'collapsed'} />
-    {(mode === 'orbit' || mode === 'preview') && <OrbitView workers={workers} selected={selected} preview={mode === 'preview'} closing={closing} onPreview={setPreview} onClose={closeOrbit} onOpen={openSession} navigationMessage={navigationMessage} />}
-    {mode === 'empty' && <EmptyCrew closing={closing} onClose={closeOrbit} />}
+    {(mode === 'orbit' || mode === 'preview') && <OrbitView workers={workers} selected={selected} preview={mode === 'preview'} closing={closing} onPreview={setPreview} onClose={closeOrbit} onOpen={openSession} navigationMessage={navigationMessage} hookHealth={hookHealth} />}
+    {mode === 'empty' && <EmptyCrew closing={closing} onClose={closeOrbit} hookHealth={hookHealth} />}
   </main>
 }
 
@@ -296,14 +300,15 @@ function CrewOrbit({ workers }: { workers: Worker[] }) {
   const needsAttention = Boolean(captain.question || captain.permission || captain.state === 'waiting' || captain.signal)
   return <span className="crew-orbit" aria-hidden="true"><i className="crew-orbit__ring" />{crew.map((worker, index) => index === 0 && needsAttention ? null : <i key={worker.id} className="crew-orbit__dot" style={{ ...orbitDotSlots[index], background: `oklch(.72 .10 ${worker.hue})` }} />)}{needsAttention && <b className="crew-orbit__question">?</b>}<Helmet size={38} hue={captain.hue} mark={captain.mark} state={captain.state} delay={captain.delay} /></span>
 }
-function OrbitView({ workers: observed, selected, preview, closing, onPreview, onClose, onOpen, navigationMessage }: { workers: Worker[]; selected: Worker; preview: boolean; closing: boolean; onPreview: (worker: Worker) => void; onClose: () => void; onOpen: (worker: Worker) => void; navigationMessage: string }) {
+function OrbitView({ workers: observed, selected, preview, closing, onPreview, onClose, onOpen, navigationMessage, hookHealth }: { workers: Worker[]; selected: Worker; preview: boolean; closing: boolean; onPreview: (worker: Worker) => void; onClose: () => void; onOpen: (worker: Worker) => void; navigationMessage: string; hookHealth: HookHealth }) {
   const workers = orderedCrew(observed)
   if (!workers.length) return null
   const attention = workers.filter(worker => worker.state === 'waiting' || worker.signal).length
+  const healthMessage = hookHealth === 'degraded' ? '⚠️ Hook coverage degraded' : hookHealth === 'unknown' ? 'Initializing...' : navigationMessage || 'Observing Claude Code'
   return <div className={`orbit-stage${preview ? ' orbit-stage--preview' : ''}${closing ? ' orbit-stage--closing' : ''}`}>
     {preview && <HoverPreview key={selected.id} worker={selected} />}
     <div className="orbit-panel"><button className="orbit-close" onClick={onClose} aria-label="Close Orbit" title="Close Orbit">×</button><div className="orbit-ring orbit-ring--outer" /><div className={`orbit-ring orbit-ring--inner${attention ? ' orbit-ring--attention' : ''}`} /><div className={`orbit-hub${attention ? ' orbit-hub--attention' : ''}`}><b>{attention || workers.length}</b><span>{attention ? `${attention} NEEDS YOU` : `${workers.length} OBSERVED`}</span></div>{workers.slice(0, orbitSlots.length).map((worker, index) => { const slot = orbitSlots[index]; return <button key={worker.id} data-orbit-preview-region={`worker:${worker.id}`} className={`orbit-worker orbit-worker--${worker.state}${slot.inner ? ' orbit-worker--inner' : ''}${preview && selected.id !== worker.id ? ' orbit-worker--dim' : ''}`} style={{ left: slot.left, top: slot.top, '--delay': worker.delay } as CSSProperties} onFocus={() => onPreview(worker)} aria-label={`Open ${worker.title} in Claude Code`} aria-describedby={preview && selected.id === worker.id ? 'worker-preview' : undefined} onClick={() => onOpen(worker)}><span className={worker.signal ? 'worker-dashed' : ''}><Astronaut size={slot.size} hue={worker.hue} mark={worker.mark} state={worker.state} delay={worker.delay} /></span><strong>{worker.name}</strong><small>{worker.action}</small></button> })}</div>
-    <div className="observation-bar orbit-drag-region" title="Drag to move Orbit"><span role="status">{navigationMessage || 'Observing Claude Code'}</span></div>
+    <div className="observation-bar orbit-drag-region" title="Drag to move Orbit"><span role="status">{healthMessage}</span></div>
   </div>
 }
 function HoverPreview({ worker }: { worker: Worker }) {
@@ -330,4 +335,7 @@ function HoverPreview({ worker }: { worker: Worker }) {
     <i className="hover-arrow" aria-hidden="true" />
   </aside>
 }
-function EmptyCrew({ closing, onClose }: { closing: boolean; onClose: () => void }) { return <div className={`empty-stage${closing ? ' empty-stage--closing' : ''}`}><section className="empty-crew"><button className="orbit-close" onClick={onClose} aria-label="Close Orbit">×</button><div className="empty-airlock"><i /><Astronaut size={52} hue={210} mark="dot" state="idle" /></div><div><h1>Nobody out there yet</h1><p>Orbit is observing local Claude Code sessions. Start a session in your terminal and it will appear here.</p></div><small>read-only observation</small><small>drag me anywhere</small></section><div className="observation-bar orbit-drag-region" title="Drag to move Orbit"><span>Observing local Claude Code sessions</span><em>read-only</em></div></div> }
+function EmptyCrew({ closing, onClose, hookHealth }: { closing: boolean; onClose: () => void; hookHealth: HookHealth }) {
+  const healthMessage = hookHealth === 'degraded' ? '⚠️ Hook coverage degraded' : hookHealth === 'unknown' ? 'Initializing...' : 'Observing local Claude Code sessions'
+  return <div className={`empty-stage${closing ? ' empty-stage--closing' : ''}`}><section className="empty-crew"><button className="orbit-close" onClick={onClose} aria-label="Close Orbit">×</button><div className="empty-airlock"><i /><Astronaut size={52} hue={210} mark="dot" state="idle" /></div><div><h1>Nobody out there yet</h1><p>Orbit is observing local Claude Code sessions. Start a session in your terminal and it will appear here.</p></div><small>read-only observation</small><small>drag me anywhere</small></section><div className="observation-bar orbit-drag-region" title="Drag to move Orbit"><span>{healthMessage}</span><em>read-only</em></div></div>
+}

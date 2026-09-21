@@ -6,7 +6,7 @@
   "main": "out/main/index.js",
   "scripts": {
     "dev": "env -u ELECTRON_RUN_AS_NODE electron-vite dev",
-    "build": "electron-vite build",
+    "build": "npm run build:collector && electron-vite build",
     "build:collector": "mkdir -p .build && swiftc -O -framework CryptoKit native/OrbitHookCollector/main.swift -o .build/orbit-claude-hook-collector",
     "hooks:preview": "node scripts/claude-hooks.mjs",
     "hooks:install": "node scripts/claude-hooks.mjs --apply",
@@ -40,6 +40,12 @@
     "files": [
       "out/**/*",
       "package.json"
+    ],
+    "extraResources": [
+      {
+        "from": ".build/orbit-claude-hook-collector",
+        "to": "orbit-claude-hook-collector"
+      }
     ],
     "mac": {
       "target": [

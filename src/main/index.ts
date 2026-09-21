@@ -5,6 +5,7 @@ import { z } from 'zod'
 import { WorkerManager } from './claude/WorkerManager'
 import { PersistenceStore } from './runtime/PersistenceStore'
 import { crew } from '../renderer/src/crew'
+import { areHooksInstalled, installHooks } from './claude/hooks/HookInstaller'
 
 type Mode = 'collapsed' | 'orbit' | 'preview' | 'empty'
 // The collapsed pod keeps one fixed footprint across worker transitions so
@@ -25,6 +26,44 @@ let dragging = false
 const mockAttentionWorkers = () => process.env.ORBIT_MOCK_ATTENTION === '1' ? [crew[0]] : undefined
 
 function clamp(value: number, min: number, max: number): number { return Math.min(Math.max(value, min), Math.max(min, max)) }
+
+async function ensureHooksInstalled(): Promise<void> {
+  const observationRoot = join(app.getPath('appData'), 'Orbit', 'claude-observation')
+
+  try {
+    // Check if hooks are already installed
+    const installed = await areHooksInstalled({ observationRoot })
+    if (installed) {
+      console.log('[Orbit] Hooks already installed')
+      return
+    }
+
+    console.log('[Orbit] Hooks not installed, installing automatically...')
+
+    // Find the collector binary
+    // In development: .build/orbit-claude-hook-collector
+    // In production: app.getAppPath()/resources/orbit-claude-hook-collector
+    const isDev = !app.isPackaged
+    const collectorSource = isDev
+      ? join(process.cwd(), '.build', 'orbit-claude-hook-collector')
+      : join(process.resourcesPath, 'orbit-claude-hook-collector')
+
+    const result = await installHooks({
+      observationRoot,
+      collectorSource
+    })
+
+    if (result.success) {
+      console.log('[Orbit] Hooks installed successfully:', result.message)
+    } else {
+      console.error('[Orbit] Hook installation failed:', result.message)
+      // Don't throw - allow the app to continue with recovery mode
+    }
+  } catch (error) {
+    console.error('[Orbit] Hook installation error:', error)
+    // Don't throw - allow the app to continue with recovery mode
+  }
+}
 function currentWorkArea() {
   if (!window) return screen.getPrimaryDisplay().workArea
   const bounds = window.getBounds()
@@ -117,6 +156,9 @@ function createWindow(): void {
     window?.showInactive()
     startPointerMonitor()
     if (window && !mockAttentionWorkers()) {
+      // Auto-install hooks if not already installed
+      await ensureHooksInstalled()
+
       workerManager = new WorkerManager()
       await workerManager.initialize(window, join(app.getPath('appData'), 'Orbit', 'claude-observation'))
       workerManager.on('integration-error', (error: Error) => console.error('[Orbit observation]', error))
@@ -135,6 +177,20 @@ app.whenReady().then(async () => {
   if (process.platform === 'darwin') app.dock?.hide()
   persistence = new PersistenceStore(join(app.getPath('userData'), 'orbit-state.json'))
   await persistence.load()
+
+  // Enable auto-launch on startup (unless explicitly disabled)
+  const autoLaunch = persistence.snapshot().autoLaunch ?? true
+  if (autoLaunch && !app.isPackaged) {
+    // In development, don't enable auto-launch to avoid confusion
+    console.log('[Orbit] Auto-launch disabled in development mode')
+  } else if (autoLaunch) {
+    app.setLoginItemSettings({
+      openAtLogin: true,
+      openAsHidden: true,
+      name: 'Orbit'
+    })
+  }
+
   createWindow()
   const modeSchema = z.enum(['collapsed', 'orbit', 'preview', 'empty'])
   const pointSchema = z.object({ x: z.number(), y: z.number() })

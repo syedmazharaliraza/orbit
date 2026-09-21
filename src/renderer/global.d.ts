@@ -15,6 +15,7 @@ declare global {
       onToggle(listener: () => void): () => void
       onPointerLeftWindow(listener: () => void): () => void
       onWorkersUpdated(listener: (workers: Worker[]) => void): () => void
+      onHookHealthChanged(listener: (health: 'healthy' | 'degraded' | 'unknown') => void): () => void
     }
   }
 }

@@ -5,7 +5,8 @@ import { z } from 'zod'
 const positionSchema = z.object({ x: z.number(), y: z.number() }).optional()
 const schema = z.object({
   version: z.literal(1),
-  position: positionSchema
+  position: positionSchema,
+  autoLaunch: z.boolean().optional()
 })
 
 export type PersistedOrbitState = z.infer<typeof schema>
